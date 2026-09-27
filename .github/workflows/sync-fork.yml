@@ -1,0 +1,50 @@
+---
+name: Sync fork main
+
+"on":
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-fork-main
+  cancel-in-progress: false
+
+jobs:
+  sync-main:
+    name: Mirror upstream main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Mirror upstream main with fast-forward only
+        shell: bash
+        env:
+          UPSTREAM_URL: https://github.com/HuangAntimony/Hoshi-Reader-Android.git
+        run: |
+          set -euo pipefail
+          if ! git remote get-url upstream >/dev/null 2>&1; then
+            git remote add upstream "${UPSTREAM_URL}"
+          fi
+          git fetch upstream --tags
+          git checkout main
+          if ! git merge-base --is-ancestor main upstream/main; then
+            echo "Local main has commits outside upstream/main; refusing to mirror." >&2
+            exit 1
+          fi
+          if [ "$(git rev-parse main)" = "$(git rev-parse upstream/main)" ]; then
+            echo "main is already in sync with upstream/main."
+          else
+            git reset --hard upstream/main
+            git push origin main
+          fi
