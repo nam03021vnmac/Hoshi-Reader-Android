@@ -33,6 +33,99 @@ class SasayakiAudiobookChaptersTest {
     }
 
     @Test
+    fun parsesQuickTimeChapterTrackFromM4b() {
+        val file = temporaryFolder.newFile("chapters-track.m4b")
+        file.writeBytes(
+            minimalMp4WithChapterTrack(
+                durationSeconds = 100.0,
+                chapters = listOf(
+                    SasayakiChapterFixture(startSeconds = 0.0, title = "タイトル/著者"),
+                    SasayakiChapterFixture(startSeconds = 33.668, title = "第一話 雨"),
+                    SasayakiChapterFixture(startSeconds = 60.0, title = "第二話 雪"),
+                ),
+            ),
+        )
+
+        val chapters = SasayakiAudiobookChapters.parse(file)
+
+        assertEquals(3, chapters.size)
+        assertEquals("タイトル/著者", chapters[0].title)
+        assertEquals(0.0, chapters[0].startSeconds, 0.001)
+        assertEquals(33.668, chapters[1].startSeconds, 0.001)
+        assertEquals(33.668, chapters[0].endSeconds ?: error("Missing end"), 0.001)
+        assertEquals(60.0, chapters[2].startSeconds, 0.001)
+        assertEquals(100.0, chapters[2].endSeconds ?: error("Missing end"), 0.001)
+    }
+
+    @Test
+    fun parsesChapterTrackWithAudioRateTimescaleAndLongGaps() {
+        val file = temporaryFolder.newFile("chapters-audio-timescale.m4b")
+        file.writeBytes(
+            minimalMp4WithChapterTrack(
+                durationSeconds = 40_070.94,
+                chapters = listOf(
+                    SasayakiChapterFixture(startSeconds = 0.0, title = "タイトル/著者"),
+                    SasayakiChapterFixture(startSeconds = 33.668, title = "第一話"),
+                    SasayakiChapterFixture(startSeconds = 2744.319, title = "第二話"),
+                    SasayakiChapterFixture(startSeconds = 39983.641, title = "著者紹介/奥付"),
+                ),
+                timescale = 22_050L,
+            ),
+        )
+
+        val chapters = SasayakiAudiobookChapters.parse(file)
+
+        assertEquals(4, chapters.size)
+        assertEquals(0.0, chapters[0].startSeconds, 0.001)
+        assertEquals(33.668, chapters[1].startSeconds, 0.001)
+        assertEquals(2744.319, chapters[2].startSeconds, 0.001)
+        assertEquals(39983.641, chapters[3].startSeconds, 0.001)
+    }
+
+    @Test
+    fun parsesChapterTrackWithoutTrefByTextHandler() {
+        val file = temporaryFolder.newFile("chapters-no-tref.m4b")
+        file.writeBytes(
+            minimalMp4WithChapterTrack(
+                durationSeconds = 50.0,
+                chapters = listOf(
+                    SasayakiChapterFixture(startSeconds = 0.0, title = "Opening"),
+                    SasayakiChapterFixture(startSeconds = 25.0, title = "Ending"),
+                ),
+                includeTref = false,
+            ),
+        )
+
+        val chapters = SasayakiAudiobookChapters.parse(file)
+
+        assertEquals(listOf("Opening", "Ending"), chapters.map { it.title })
+    }
+
+    @Test
+    fun mergesNeroChplAndChapterTrackWithoutDuplicates() {
+        val file = temporaryFolder.newFile("chapters-merged.m4b")
+        file.writeBytes(
+            minimalMp4WithChplAndChapterTrack(
+                durationSeconds = 90.0,
+                chplChapters = listOf(
+                    SasayakiChapterFixture(startSeconds = 0.0, title = "Prologue"),
+                    SasayakiChapterFixture(startSeconds = 45.0, title = "Ending"),
+                ),
+                trackChapters = listOf(
+                    SasayakiChapterFixture(startSeconds = 0.0, title = "Prologue"),
+                    SasayakiChapterFixture(startSeconds = 45.0, title = "Ending"),
+                ),
+            ),
+        )
+
+        val chapters = SasayakiAudiobookChapters.parse(file)
+
+        assertEquals(listOf("Prologue", "Ending"), chapters.map { it.title })
+        assertEquals(0.0, chapters[0].startSeconds, 0.000_001)
+        assertEquals(45.0, chapters[1].startSeconds, 0.000_001)
+    }
+
+    @Test
     fun parsesVorbisCommentChaptersFromOpus() {
         val file = temporaryFolder.newFile("book.opus")
         file.writeBytes(

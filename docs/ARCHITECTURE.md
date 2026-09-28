@@ -472,7 +472,10 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   seekable sources before playback starts. M4B inspection reads MP4 metadata, `moov/udta/chpl`, and
   `mvhd`; Opus inspection reads OpusTags and derives duration from the final
   Ogg granule position after pre-skip without invoking Android's platform
-  metadata reader. MP3 keeps the platform metadata/duration path and has no
+  metadata reader. M4B chapters come from Nero `moov/udta/chpl` or the
+  QuickTime chapter text track (`moov/trak/tref/chap` referencing a timed-text
+  track decoded through its `stts`/`stsz`/`stsc`/`stco` sample table). MP3 keeps
+  the platform metadata/duration path and has no
   app-level chapter parser. A provider that exposes only a non-seekable stream
   may leave static duration or container-only metadata unknown until playback
   preparation. Displayed artist normalization remains `ARTIST`, then
