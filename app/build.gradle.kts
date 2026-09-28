@@ -1,4 +1,7 @@
 import hoshi.build.PrepareSherpaTask
+import java.io.File as JFile
+import java.nio.file.Paths as JPaths
+import java.util.Properties as JProperties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -12,13 +15,63 @@ val rustProjectDir = file("src/main/rust/hoshiepub")
 val uniffiOutDir = layout.buildDirectory.dir("generated/source/uniffi/main/kotlin").get().asFile
 val rustDebugJniLibsDir = layout.buildDirectory.dir("jniLibs/debug").get().asFile
 val rustReleaseJniLibsDir = layout.buildDirectory.dir("jniLibs/release").get().asFile
-val cargo = System.getenv("HOME") + "/.cargo/bin/cargo"
+val isWindowsHost = System.getProperty("os.name").lowercase().contains("win")
+val cargoExeName = if (isWindowsHost) "cargo.exe" else "cargo"
+fun resolveCargo(): String {
+    val candidates = listOfNotNull(
+        System.getenv("CARGO_HOME")?.takeIf { it.isNotBlank() }
+            ?.let { JPaths.get(it, "bin", cargoExeName).toString() },
+        System.getenv("HOME")?.takeIf { it.isNotBlank() }
+            ?.let { JPaths.get(it, ".cargo", "bin", cargoExeName).toString() },
+        System.getenv("USERPROFILE")?.takeIf { it.isNotBlank() }
+            ?.let { JPaths.get(it, ".cargo", "bin", cargoExeName).toString() },
+    )
+    for (candidate in candidates) {
+        if (JFile(candidate).isFile) return candidate
+    }
+    // Fall back to PATH lookup (rustup installers put cargo on PATH).
+    return cargoExeName
+}
+val cargo = resolveCargo()
 val sherpaOnnxArtifact = "com.k2fsa.sherpa:sherpa-onnx:${libs.versions.sherpaOnnx.get()}@aar"
 val sherpaOnnxArchive by configurations.creating {
     isCanBeConsumed = false
     isTransitive = false
 }
-val androidNdkHome = System.getenv("ANDROID_NDK_HOME") ?: "/opt/homebrew/share/android-ndk"
+val configuredNdkVersion = "29.0.14206865"
+fun resolveAndroidNdkHome(): String {
+    System.getenv("ANDROID_NDK_HOME")?.takeIf { it.isNotBlank() }?.let { return it }
+    val localSdkDir: String? = try {
+        val props = JProperties()
+        val localProps = rootProject.file("local.properties")
+        if (localProps.isFile) {
+            localProps.inputStream().use { props.load(it) }
+            props.getProperty("sdk.dir")?.takeIf { value: String -> value.isNotBlank() }
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        null
+    }
+    val sdkRoots = listOfNotNull(
+        System.getenv("ANDROID_HOME")?.takeIf { it.isNotBlank() },
+        System.getenv("ANDROID_SDK_ROOT")?.takeIf { it.isNotBlank() },
+        localSdkDir,
+        System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }
+            ?.let { JPaths.get(it, "Android", "Sdk").toString() },
+        System.getProperty("user.home")?.takeIf { it.isNotBlank() }
+            ?.let { JPaths.get(it, "AppData", "Local", "Android", "Sdk").toString() },
+        System.getProperty("user.home")?.takeIf { it.isNotBlank() }
+            ?.let { JPaths.get(it, "Library", "Android", "sdk").toString() },
+    )
+    for (sdkRoot in sdkRoots) {
+        val versioned = JPaths.get(sdkRoot, "ndk", configuredNdkVersion).toString()
+        if (JFile(versioned).isDirectory) return versioned
+    }
+    // Legacy macOS fallback preserved for existing local setups.
+    return "/opt/homebrew/share/android-ndk"
+}
+val androidNdkHome = resolveAndroidNdkHome()
 val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_FILE").orNull
 val releaseKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
@@ -55,7 +108,7 @@ val hostLibExtension = when {
 
 android {
     namespace = "moe.antimony.hoshi"
-    ndkVersion = "29.0.14206865"
+    ndkVersion = configuredNdkVersion
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
