@@ -314,8 +314,6 @@ private fun SasayakiPlaybackHeader(
                         text = chapterTitle,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 2.dp),
                     )
                 }

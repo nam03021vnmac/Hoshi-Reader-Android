@@ -16,6 +16,10 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
   dictionary results can be dismissed without opening the action bar or using outside-tap
   and swipe gestures.
 
+### Fixed
+
+- Show the full Sasayaki current-chapter title instead of truncating long titles.
+
 ## [v1.4.0] - 2026-09-24
 
 ### Added
