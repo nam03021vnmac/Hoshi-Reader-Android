@@ -766,8 +766,6 @@ private fun SasayakiChapterRow(
                         MaterialTheme.colorScheme.onSurface
                     },
                     style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 if (selected) {
                     Text(

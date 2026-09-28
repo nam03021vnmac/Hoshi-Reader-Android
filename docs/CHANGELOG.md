@@ -18,7 +18,8 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
 
 ### Fixed
 
-- Show the full Sasayaki current-chapter title instead of truncating long titles.
+- Show full Sasayaki chapter titles instead of truncating long ones in the playback
+  header and the chapter list.
 - Show Sasayaki chapters for M4B audiobooks that store chapters as a QuickTime
   chapter text track instead of Nero chapter atoms.
 
