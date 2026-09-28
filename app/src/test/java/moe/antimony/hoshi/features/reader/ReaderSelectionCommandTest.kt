@@ -4,6 +4,7 @@ import moe.antimony.hoshi.epub.HighlightColor
 import moe.antimony.hoshi.features.dictionary.DictionarySettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -54,6 +55,30 @@ class ReaderSelectionCommandTest {
             """window.hoshiHighlights.removeHighlight("highlight-1")""",
             ReaderHighlightCommand.Remove("highlight-1").source,
         )
+    }
+
+    @Test
+    fun hitTestCommandBuildsHitTestInvocation() {
+        val command = ReaderSelectionCommand.HitTest(x = 12.5f, y = 24.25f)
+
+        assertEquals("window.hoshiSelection.hitTest(12.5, 24.25)", command.source)
+    }
+
+    @Test
+    fun hitTestResultParsesNormalizedOffset() {
+        assertEquals(
+            12,
+            ReaderHitTestResult.fromWebViewResult("\"{\\\"normalizedOffset\\\":12}\""),
+        )
+        assertEquals(
+            0,
+            ReaderHitTestResult.fromWebViewResult("\"{\\\"normalizedOffset\\\":0}\""),
+        )
+        assertNull(ReaderHitTestResult.fromWebViewResult(null))
+        assertNull(ReaderHitTestResult.fromWebViewResult("null"))
+        assertNull(ReaderHitTestResult.fromWebViewResult("undefined"))
+        assertNull(ReaderHitTestResult.fromWebViewResult("\"{}\""))
+        assertNull(ReaderHitTestResult.fromWebViewResult("not json"))
     }
 
     @Test

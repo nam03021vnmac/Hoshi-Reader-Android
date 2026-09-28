@@ -885,6 +885,11 @@ private fun SasayakiSettingsTab(
             checked = settings.autoPause,
             onCheckedChange = { onSettingsChange(settings.copy(autoPause = it)) },
         )
+        SasayakiSettingsSwitchRow(
+            label = stringResource(R.string.sasayaki_double_tap_text_to_seek_audio),
+            checked = settings.doubleTapTextToSeekAudio,
+            onCheckedChange = { onSettingsChange(settings.copy(doubleTapTextToSeekAudio = it)) },
+        )
         HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
         SasayakiColorSheetSection(
             title = stringResource(R.string.sasayaki_light_theme),

@@ -3,6 +3,7 @@
     const LAYER_ID = 'hoshi-reader-popup-layer';
     const ACTION_BAR_HEIGHT = 37;
     const SASAYAKI_BAR_HEIGHT = 37;
+    const DICTIONARY_SEARCH_ROOT_ID = 'dictionary-search-root';
     const HIGHLIGHT_LINE_SIZE = 1.5;
     const HIGHLIGHT_INLINE_MERGE_TOLERANCE = 1;
     const frames = new Map();
@@ -92,8 +93,13 @@
         return bar;
     }
 
+    function shouldShowFloatingClose(payload) {
+        return !payload.actionBarVisible && payload.id !== DICTIONARY_SEARCH_ROOT_ID;
+    }
+
     function renderControls(shell, payload, iframe) {
         shell.querySelectorAll('.hoshi-reader-popup-bar').forEach(node => node.remove());
+        shell.querySelectorAll('.hoshi-reader-popup-close-fab').forEach(node => node.remove());
         if (payload.actionBarVisible) {
             shell.insertBefore(
                 buildBar('hoshi-reader-popup-bar hoshi-reader-popup-action-bar', [
@@ -113,6 +119,11 @@
                     button('start', true, () => postNative({ name: 'sasayakiPlayForward', popupId: payload.id }), 'Play from cue', 'hoshi-reader-popup-sasayaki-control')
                 ]),
                 iframe,
+            );
+        }
+        if (shouldShowFloatingClose(payload)) {
+            shell.appendChild(
+                button('close', true, () => postNative({ name: 'swipeDismiss', popupId: payload.id }), 'Close', 'hoshi-reader-popup-close-fab'),
             );
         }
     }
@@ -290,6 +301,7 @@
         record.shell.dataset.popupId = '';
         setRevealReady(record, false);
         record.shell.querySelectorAll('.hoshi-reader-popup-bar').forEach(node => node.remove());
+        record.shell.querySelectorAll('.hoshi-reader-popup-close-fab').forEach(node => node.remove());
         record.iframe.style.top = '0px';
         record.iframe.style.height = '100%';
         idleRootRecord = record;
@@ -834,6 +846,38 @@
             mask-repeat: no-repeat;
             -webkit-mask-size: contain;
             mask-size: contain;
+        }
+        #${LAYER_ID} .hoshi-reader-popup-close-fab {
+            position: absolute;
+            top: 2px;
+            right: 4px;
+            z-index: 5;
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            padding: 6px;
+            border: 0;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.92);
+            color: rgba(60, 60, 67, 0.86);
+        }
+        #${LAYER_ID} .hoshi-reader-popup-close-fab:active {
+            background: rgba(228, 228, 230, 0.95);
+        }
+        #${LAYER_ID} .hoshi-reader-popup-shell[data-dark-mode="true"] .hoshi-reader-popup-close-fab {
+            background: rgba(28, 28, 30, 0.92);
+            color: rgba(255, 255, 255, 0.92);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.44);
+        }
+        #${LAYER_ID} .hoshi-reader-popup-shell[data-dark-mode="true"] .hoshi-reader-popup-close-fab:active {
+            background: rgba(58, 58, 60, 0.95);
+        }
+        #${LAYER_ID} .hoshi-reader-popup-shell[data-e-ink-mode="true"] .hoshi-reader-popup-close-fab {
+            border-radius: 0;
+            box-shadow: none;
         }
     `;
     document.documentElement.appendChild(style);

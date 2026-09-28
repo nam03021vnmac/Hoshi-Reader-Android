@@ -682,6 +682,76 @@ test('shared selection clips vertical ruby annotation rects to partial base sele
     );
 });
 
+test('hit test returns the normalized offset without mutating the selection', () => {
+    const { document, selection, textNode, window } = loadSelection('猫が走る');
+    document.pointElement = hitElement([]);
+    window.hoshiReader = {};
+    selection.getCharacterAtPoint = () => ({ node: textNode, offset: 3 });
+    selection.selectionStartForHit = (hit) => hit;
+    selection.getNormalizedOffset = () => 7;
+    let posted = false;
+    selection.postTextSelected = () => {
+        posted = true;
+    };
+
+    assert.equal(selection.hitTest(1, 1), JSON.stringify({ normalizedOffset: 7 }));
+    assert.equal(selection.selection, null);
+    assert.equal(posted, false);
+});
+
+test('hit test ignores link, image, and blank hits', () => {
+    const { document, selection, textNode, window } = loadSelection('猫');
+    window.hoshiReader = {};
+    selection.getCharacterAtPoint = () => ({ node: textNode, offset: 0 });
+    selection.selectionStartForHit = (hit) => hit;
+    selection.getNormalizedOffset = () => 0;
+
+    document.pointElement = hitElement(['a']);
+    assert.equal(selection.hitTest(1, 1), null);
+
+    document.pointElement = hitElement(['img']);
+    assert.equal(selection.hitTest(1, 1), null);
+
+    document.pointElement = hitElement([]);
+    selection.getCharacterAtPoint = () => null;
+    assert.equal(selection.hitTest(1, 1), null);
+});
+
+test('hit test resolves the offset through the configured text projection', () => {
+    const { document, selection, textNode: sourceNode } = loadSelection('激しい抵抗');
+    document.pointElement = hitElement([]);
+    selection.getCharacterAtPoint = () => ({ node: sourceNode, offset: 2 });
+    selection.configure({
+        textProjection: {
+            toSemanticHit(hit) {
+                return hit;
+            },
+            normalizedOffsetForHit() {
+                return 42;
+            },
+        },
+    });
+
+    assert.equal(selection.hitTest(1, 1), JSON.stringify({ normalizedOffset: 42 }));
+    assert.equal(selection.selection, null);
+});
+
+test('hit test fails closed when the text projection cannot map the hit', () => {
+    const { document, selection, textNode } = loadSelection('激');
+    document.pointElement = hitElement([]);
+    selection.getCharacterAtPoint = () => ({ node: textNode, offset: 0 });
+    selection.configure({
+        textProjection: {
+            toSemanticHit() {
+                return null;
+            },
+        },
+    });
+
+    assert.equal(selection.hitTest(1, 1), null);
+    assert.equal(selection.selection, null);
+});
+
 test('shared selection keeps vertical lookup rects split when adjacent ruby-aware columns barely overlap', () => {
     const { selection, window } = loadSelection('信憑性がある');
     window.getComputedStyle = () => ({ writingMode: 'vertical-rl' });

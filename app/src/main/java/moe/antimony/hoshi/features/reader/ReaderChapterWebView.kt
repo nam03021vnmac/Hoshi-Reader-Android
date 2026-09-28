@@ -90,6 +90,8 @@ internal fun ChapterWebView(
     sasayakiTextColor: Long,
     sasayakiBackgroundColor: Long,
     onTextSelected: (ReaderSelectionData, selectionRects: (Int, (List<ReaderSelectionRect>) -> Unit) -> Unit) -> Unit,
+    sasayakiDoubleTapSeekArmed: Boolean = false,
+    onDoubleTapText: (Int) -> Boolean = { false },
     onClearLookupPopup: () -> Unit,
     onReaderTapOutside: () -> Unit,
     onReaderInteraction: () -> Unit,
@@ -105,6 +107,10 @@ internal fun ChapterWebView(
 ) {
     val currentOnRendererTerminated = rememberUpdatedState(onRendererTerminated)
     val currentOnTextSelected = rememberUpdatedState(onTextSelected)
+    val currentDoubleTapSeekArmed = rememberUpdatedState(sasayakiDoubleTapSeekArmed)
+    val currentOnDoubleTapText = rememberUpdatedState(onDoubleTapText)
+    val doubleTapTracker = remember { ReaderDoubleTapTracker() }
+    val pendingSingleTapHolder = remember { PendingSingleTapHolder() }
     val currentOnSaveBookmark = rememberUpdatedState(onSaveBookmark)
     val currentOnDisplayProgress = rememberUpdatedState(onDisplayProgress)
     val currentOnContinuousScrollDisplayProgress = rememberUpdatedState(onContinuousScrollDisplayProgress)
@@ -324,6 +330,46 @@ internal fun ChapterWebView(
                     }
                 }
             }
+            fun hitTestSasayakiCue(x: Float, y: Float, onResult: (Int?) -> Unit) {
+                val density = webView.resources.displayMetrics.density
+                webView.evaluateJavascript(
+                    ReaderSelectionCommand.HitTest(
+                        x = androidPixelsToCssPixels(x, density),
+                        y = androidPixelsToCssPixels(y, density),
+                    ).source,
+                ) { result ->
+                    onResult(ReaderHitTestResult.fromWebViewResult(result))
+                }
+            }
+            fun cancelPendingSingleTap() {
+                pendingSingleTapHolder.runnable?.let(webView::removeCallbacks)
+                pendingSingleTapHolder.runnable = null
+            }
+            fun handleTap(x: Float, y: Float, singleTap: () -> Unit) {
+                if (!currentDoubleTapSeekArmed.value) {
+                    singleTap()
+                    return
+                }
+                if (doubleTapTracker.onTap(x, y, SystemClock.uptimeMillis())) {
+                    cancelPendingSingleTap()
+                    hitTestSasayakiCue(x, y) { offset ->
+                        val consumed = offset != null && currentOnDoubleTapText.value(offset)
+                        if (!consumed) singleTap()
+                    }
+                } else {
+                    // Defer the single-tap lookup until the double-tap window
+                    // passes so a following seek tap never flashes a popup.
+                    lateinit var deferred: Runnable
+                    deferred = Runnable {
+                        if (pendingSingleTapHolder.runnable === deferred) {
+                            pendingSingleTapHolder.runnable = null
+                            singleTap()
+                        }
+                    }
+                    pendingSingleTapHolder.runnable = deferred
+                    webView.postDelayed(deferred, ReaderDoubleTapTracker.DOUBLE_TAP_TIMEOUT_MS)
+                }
+            }
             fun shouldIgnoreReaderGestureEvent(event: MotionEvent): Boolean {
                 if (currentIsWebViewRestoring.value || webView.isNativeSelectionActionModeActive()) {
                     return true
@@ -341,7 +387,11 @@ internal fun ChapterWebView(
                         ContinuousScrollTouchListener(
                             settings = readerSettings,
                             shouldIgnoreReaderGesture = ::shouldIgnoreReaderGestureEvent,
-                            onTap = { x, y -> selectAt(x, y) { currentOnReaderTapOutside.value() } },
+                            onTap = { x, y ->
+                                handleTap(x, y) {
+                                    selectAt(x, y) { currentOnReaderTapOutside.value() }
+                                }
+                            },
                             onScrollGesture = currentOnReaderInteraction.value,
                             onNextChapter = {
                                 currentOnReaderInteraction.value()
@@ -418,8 +468,9 @@ internal fun ChapterWebView(
                                 shouldIgnoreReaderGestureEvent(event)
 
                             override fun onTap(x: Float, y: Float) {
-                                selectAt(x, y) {
-                                    if (readerSettings.viewMode == ReaderViewMode.VisualNovel && readerSettings.visualNovelClickAdvance) {
+                                handleTap(x, y) {
+                                    selectAt(x, y) {
+                                        if (readerSettings.viewMode == ReaderViewMode.VisualNovel && readerSettings.visualNovelClickAdvance) {
                                         currentOnReaderInteraction.value()
                                         currentOnClearLookupPopup.value()
                                         webView.navigatePageForDirection(
@@ -431,6 +482,7 @@ internal fun ChapterWebView(
                                         )
                                     } else {
                                         currentOnReaderTapOutside.value()
+                                    }
                                     }
                                 }
                             }
@@ -1434,6 +1486,10 @@ private data class ReaderAppliedSasayakiCues(
     val cuesJson: String,
     val preserveLayout: Boolean,
 )
+
+private class PendingSingleTapHolder {
+    var runnable: Runnable? = null
+}
 
 private val readerRestoreGenerations = WeakHashMap<WebView, Long>()
 private val readerAppliedSasayakiCues = WeakHashMap<WebView, ReaderAppliedSasayakiCues>()

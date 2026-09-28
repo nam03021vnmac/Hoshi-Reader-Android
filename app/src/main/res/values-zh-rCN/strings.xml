@@ -701,6 +701,7 @@
     <string name="sasayaki_image_hold_off" comment="Sasayaki image hold slider value for zero seconds; intentionally matches other off labels.">关闭</string>
     <string name="sasayaki_seconds_decimal_format">%1$.1f 秒</string>
     <string name="sasayaki_auto_pause_on_lookup">查词时自动暂停</string>
+    <string name="sasayaki_double_tap_text_to_seek_audio">双击文本播放音频</string>
     <string name="sasayaki_importing_audio">正在导入音频...</string>
     <string name="sasayaki_tab_resources">资源</string>
     <string name="sasayaki_tab_chapters" comment="Sasayaki audiobook chapter-list tab label; intentionally matches the Reader chapters label.">章节</string>

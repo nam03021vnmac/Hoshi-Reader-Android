@@ -248,6 +248,7 @@ fun ReaderWebView(
     val effectiveSettings = stateHolder.effectiveSettings
     val readerPosition = stateHolder.readerPosition
     val lookupPopups = stateHolder.lookupPopups
+    val selectionEpoch = remember { SelectionEpoch() }
     var readerPopupHistories by remember { mutableStateOf<Map<String, ReaderPopupHistoryCounts>>(emptyMap()) }
     var rootSelectionHighlight by remember { mutableStateOf<ReaderRootSelectionHighlight?>(null) }
     var fullscreenImage by remember { mutableStateOf<ReaderFullscreenImage?>(null) }
@@ -659,6 +660,21 @@ fun ReaderWebView(
             setLookupPopups(emptyList())
         }
     }
+    fun handleDoubleTapTextSeek(offset: Int): Boolean {
+        if (!sasayakiSettings.doubleTapTextToSeekAudio) return false
+        val player = sasayakiPlayer ?: return false
+        if (!sasayakiSettings.enabled || !player.hasAudio) return false
+        val cue = player.findCue(
+            chapterIndex = stateHolder.readerPosition.displayedPosition.index,
+            offset = offset,
+        ) ?: return false
+        cancelSasayakiAutoPage()
+        WordAudioPlayer.get(context).stop()
+        selectionEpoch.invalidate()
+        player.playCue(cue, stop = false)
+        closeLookupPopupsAndSelection()
+        return true
+    }
     fun openFullscreenImage(sourceUrl: String) {
         openReaderFullscreenImage(
             sourceUrl = sourceUrl,
@@ -936,12 +952,17 @@ fun ReaderWebView(
     }
     readerPopupBridgeHolder.callbacks = ReaderLookupPopupBridgeCallbacks(::handleReaderPopupBridgeMessage)
     val handleTextSelected: (ReaderSelectionData, (Int, (List<ReaderSelectionRect>) -> Unit) -> Unit) -> Unit = { selection, selectionRects ->
+        val selectionEpochAtTap = selectionEpoch.capture()
         cancelSasayakiAutoPage()
         stateHolder.enterFocusModeForReaderInteraction()
         rootSelectionHighlight = null
         setLookupPopups(emptyList())
         val lookup = lookupRootPopup(selection)
-        if (lookup != null) {
+        if (selectionEpoch.isStale(selectionEpochAtTap)) {
+            // Double-tap seek already consumed this tap: drop the late lookup
+            // result instead of flashing a popup over the playing audio.
+            clearReaderSelection()
+        } else if (lookup != null) {
             val (popup, highlightCount) = lookup
             pauseSasayakiForLookupIfNeeded()
             val selectionCount = onTextSelected(selection) ?: highlightCount
@@ -1881,6 +1902,9 @@ fun ReaderWebView(
                             sasayakiTextColor = currentSasayakiColors.textColor,
                             sasayakiBackgroundColor = currentSasayakiColors.backgroundColor,
                             onTextSelected = handleTextSelected,
+                            sasayakiDoubleTapSeekArmed = sasayakiSettings.doubleTapTextToSeekAudio &&
+                                sasayakiSettings.enabled && sasayakiPlayer?.hasAudio == true,
+                            onDoubleTapText = ::handleDoubleTapTextSeek,
                             onClearLookupPopup = ::closeLookupPopupsAndSelection,
                             onReaderTapOutside = ::handleReaderTapOutside,
                             onReaderInteraction = ::handleReaderInteraction,

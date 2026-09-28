@@ -86,6 +86,7 @@ class SasayakiSettingsRepositoryTest {
             copyAudiobookToPrivateStorage = true,
             autoScroll = false,
             autoPause = false,
+            doubleTapTextToSeekAudio = false,
             imageHoldSeconds = 4.5f,
             transcriptionPreset = SasayakiTranscriptionPreset.Fast,
             lightTextColor = 0xFF010203,

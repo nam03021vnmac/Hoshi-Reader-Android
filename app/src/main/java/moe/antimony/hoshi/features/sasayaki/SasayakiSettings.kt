@@ -52,6 +52,7 @@ data class SasayakiSettings(
     val copyAudiobookToPrivateStorage: Boolean = false,
     val autoScroll: Boolean = true,
     val autoPause: Boolean = true,
+    val doubleTapTextToSeekAudio: Boolean = true,
     val transcriptionPreset: SasayakiTranscriptionPreset = SasayakiTranscriptionPreset.Balanced,
     val imageHoldSeconds: Float = SasayakiImageHoldDefaultSeconds,
     val lightTextColor: Long = 0xFF000000,
@@ -100,6 +101,7 @@ class SasayakiSettingsStore(context: Context) : SasayakiSettingsLegacySource {
             copyAudiobookToPrivateStorage = preferences.getBoolean(KEY_COPY_AUDIOBOOK_TO_PRIVATE_STORAGE, false),
             autoScroll = preferences.getBoolean(KEY_AUTO_SCROLL, true),
             autoPause = preferences.getBoolean(KEY_AUTO_PAUSE, true),
+            doubleTapTextToSeekAudio = preferences.getBoolean(KEY_DOUBLE_TAP_TEXT_TO_SEEK_AUDIO, true),
             imageHoldSeconds = normalizeSasayakiImageHoldSeconds(
                 preferences.getFloat(KEY_IMAGE_HOLD_SECONDS, SasayakiImageHoldDefaultSeconds),
             ),
@@ -120,6 +122,7 @@ class SasayakiSettingsStore(context: Context) : SasayakiSettingsLegacySource {
             .putBoolean(KEY_COPY_AUDIOBOOK_TO_PRIVATE_STORAGE, settings.copyAudiobookToPrivateStorage)
             .putBoolean(KEY_AUTO_SCROLL, settings.autoScroll)
             .putBoolean(KEY_AUTO_PAUSE, settings.autoPause)
+            .putBoolean(KEY_DOUBLE_TAP_TEXT_TO_SEEK_AUDIO, settings.doubleTapTextToSeekAudio)
             .putFloat(KEY_IMAGE_HOLD_SECONDS, normalizeSasayakiImageHoldSeconds(settings.imageHoldSeconds))
             .putLong(KEY_LIGHT_TEXT_COLOR, settings.lightTextColor)
             .putLong(KEY_LIGHT_BACKGROUND_COLOR, settings.lightBackgroundColor)
@@ -138,6 +141,7 @@ class SasayakiSettingsStore(context: Context) : SasayakiSettingsLegacySource {
         const val KEY_COPY_AUDIOBOOK_TO_PRIVATE_STORAGE = "sasayakiCopyAudiobookToPrivateStorage"
         const val KEY_AUTO_SCROLL = "sasayakiAutoScroll"
         const val KEY_AUTO_PAUSE = "sasayakiAutoPause"
+        const val KEY_DOUBLE_TAP_TEXT_TO_SEEK_AUDIO = "sasayakiDoubleTapTextToSeekAudio"
         const val KEY_IMAGE_HOLD_SECONDS = "sasayakiImageHoldSeconds"
         const val KEY_LIGHT_TEXT_COLOR = "sasayakiTextColor"
         const val KEY_LIGHT_BACKGROUND_COLOR = "sasayakiBackgroundColor"
@@ -190,6 +194,7 @@ class SasayakiSettingsRepository(
             copyAudiobookToPrivateStorage = this[KEY_COPY_AUDIOBOOK_TO_PRIVATE_STORAGE] ?: false,
             autoScroll = this[KEY_AUTO_SCROLL] ?: true,
             autoPause = this[KEY_AUTO_PAUSE] ?: true,
+            doubleTapTextToSeekAudio = this[KEY_DOUBLE_TAP_TEXT_TO_SEEK_AUDIO] ?: true,
             transcriptionPreset = SasayakiTranscriptionPreset.fromStorage(this[KEY_TRANSCRIPTION_PRESET]),
             imageHoldSeconds = normalizeSasayakiImageHoldSeconds(
                 this[KEY_IMAGE_HOLD_SECONDS] ?: SasayakiImageHoldDefaultSeconds,
@@ -210,6 +215,7 @@ class SasayakiSettingsRepository(
         this[KEY_COPY_AUDIOBOOK_TO_PRIVATE_STORAGE] = settings.copyAudiobookToPrivateStorage
         this[KEY_AUTO_SCROLL] = settings.autoScroll
         this[KEY_AUTO_PAUSE] = settings.autoPause
+        this[KEY_DOUBLE_TAP_TEXT_TO_SEEK_AUDIO] = settings.doubleTapTextToSeekAudio
         this[KEY_TRANSCRIPTION_PRESET] = settings.transcriptionPreset.name
         this[KEY_IMAGE_HOLD_SECONDS] = normalizeSasayakiImageHoldSeconds(settings.imageHoldSeconds)
         this[KEY_LIGHT_TEXT_COLOR] = settings.lightTextColor
@@ -235,6 +241,8 @@ class SasayakiSettingsRepository(
             booleanPreferencesKey("sasayakiCopyAudiobookToPrivateStorage")
         private val KEY_AUTO_SCROLL = booleanPreferencesKey("sasayakiAutoScroll")
         private val KEY_AUTO_PAUSE = booleanPreferencesKey("sasayakiAutoPause")
+        private val KEY_DOUBLE_TAP_TEXT_TO_SEEK_AUDIO =
+            booleanPreferencesKey("sasayakiDoubleTapTextToSeekAudio")
         private val KEY_TRANSCRIPTION_PRESET = stringPreferencesKey("sasayakiTranscriptionPreset")
         private val KEY_IMAGE_HOLD_SECONDS = floatPreferencesKey("sasayakiImageHoldSeconds")
         private val KEY_LIGHT_TEXT_COLOR = longPreferencesKey("sasayakiTextColor")

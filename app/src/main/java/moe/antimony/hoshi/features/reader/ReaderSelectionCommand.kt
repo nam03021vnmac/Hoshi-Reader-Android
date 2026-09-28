@@ -1,5 +1,7 @@
 package moe.antimony.hoshi.features.reader
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.HighlightColor
 
 internal sealed interface ReaderSelectionCommand {
@@ -19,6 +21,14 @@ internal sealed interface ReaderSelectionCommand {
     ) : ReaderSelectionCommand {
         override val source: String =
             "window.hoshiSelection.highlightSelection($count)"
+    }
+
+    data class HitTest(
+        val x: Float,
+        val y: Float,
+    ) : ReaderSelectionCommand {
+        override val source: String =
+            "window.hoshiSelection.hitTest($x, $y)"
     }
 
     data class SelectionRects(
@@ -56,6 +66,29 @@ internal sealed interface ReaderHighlightCommand {
         override val source: String =
             "window.hoshiHighlights.removeHighlight(${id.javaScriptDoubleQuotedString()})"
     }
+}
+
+internal data class ReaderHitTestResult(
+    val normalizedOffset: Int,
+) {
+    companion object {
+        private val json = Json { ignoreUnknownKeys = true }
+
+        fun fromWebViewResult(result: String?): Int? {
+            val value = result?.trim() ?: return null
+            if (value == "null" || value == "undefined") return null
+            val unwrapped = runCatching { json.decodeFromString<String>(value) }.getOrNull()
+                ?: return null
+            val hit = runCatching { json.decodeFromString<HitTestPayload>(unwrapped) }.getOrNull()
+                ?: return null
+            return hit.normalizedOffset
+        }
+    }
+
+    @Serializable
+    private data class HitTestPayload(
+        val normalizedOffset: Int,
+    )
 }
 
 internal data class ReaderSelectionResult(

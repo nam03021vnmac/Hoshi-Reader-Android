@@ -690,6 +690,37 @@ window.hoshiSelection = {
         return text;
     },
 
+    hitTest(x, y, rectX = x, rectY = y) {
+        const hitElement = document.elementFromPoint(x, y);
+        if (hitElement?.closest('a')) {
+            return null;
+        }
+        if (hitElement?.closest('img, image, .blur-wrapper')) {
+            return null;
+        }
+        const rawHit = this.getCharacterAtPoint(x, y, rectX, rectY);
+        if (!rawHit) {
+            return null;
+        }
+        const projection = this.options.textProjection;
+        const semanticHit = projection
+            ? projection.toSemanticHit?.(rawHit)
+            : rawHit;
+        if (!semanticHit) {
+            return null;
+        }
+        const hit = this.selectionStartForHit(semanticHit);
+        const normalizedOffset = projection
+            ? projection.normalizedOffsetForHit?.(hit) ?? null
+            : window.hoshiReader
+                ? this.getNormalizedOffset(hit.node, hit.offset)
+                : null;
+        if (normalizedOffset === null || normalizedOffset === undefined) {
+            return null;
+        }
+        return JSON.stringify({ normalizedOffset });
+    },
+
     getSelectionRect(x, y) {
         if (!this.selection?.ranges.length) {
             return null;
