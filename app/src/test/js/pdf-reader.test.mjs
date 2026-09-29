@@ -32,6 +32,13 @@ class Element {
     child.parentElement = child.parentNode = this;
     return child;
   }
+  insertBefore(child, before) {
+    const at = before ? this.children.indexOf(before) : -1;
+    if (at >= 0) this.children.splice(at, 0, child);
+    else this.children.push(child);
+    child.parentElement = child.parentNode = this;
+    return child;
+  }
   remove() {
     this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
     this.parentElement = this.parentNode = null;
@@ -293,17 +300,23 @@ test('initial restore sizes every placeholder and renders only the nearby page w
   assert.ok(r.messages.some((message) => message.type === 'ready'));
 });
 
-test('zoom invalidates canvas and text layers, preserves page position, and caps raster memory', async () => {
+test('zoom keeps old pixels until the new scale swaps in, preserves page position, and caps raster memory', async () => {
   const r = reader();
   await r.api.open({ pageIndex: 6 });
   await r.flush();
   const oldRenders = [...r.renders];
+  const oldCanvases = oldRenders.map((render) => render.options.canvasContext.canvas);
+  assert.ok(oldCanvases.every((canvas) => canvas.parentElement));
   r.api.setZoomFactor(8);
   await r.flush();
-  assert.ok(oldRenders.every((render) => render.options.canvasContext.canvas.width === 0));
+  await r.flush();
   assert.ok(r.renders.length > oldRenders.length);
+  // Previous pages stay on screen instead of flashing empty: old canvases are
+  // detached only once their replacement has rendered.
+  assert.ok(oldCanvases.every((canvas) => !canvas.parentElement));
   for (const render of r.renders.slice(oldRenders.length)) {
     const canvas = render.options.canvasContext.canvas;
+    assert.ok(canvas.parentElement);
     assert.equal(canvas.style.width, '4800px');
     assert.ok(canvas.width * canvas.height <= 4 * 1024 * 1024);
     assert.ok(canvas.width <= 8192 && canvas.height <= 8192);
@@ -359,7 +372,8 @@ test('render failures emit only the typed failure message and release the canvas
   await r.flush();
   assert.deepEqual(r.messages.at(-1), { type: 'loadFailed' });
   assert.equal(r.root.children[0].children.length, 0);
-  assert.equal(r.renders[0].options.canvasContext.canvas.width, 0);
+  // A failed render never reaches the page: no black canvas is attached.
+  assert.ok(!r.renders[0].options.canvasContext.canvas.parentElement);
 });
 
 test('eviction before getPage resolves never allocates an offscreen canvas', async () => {

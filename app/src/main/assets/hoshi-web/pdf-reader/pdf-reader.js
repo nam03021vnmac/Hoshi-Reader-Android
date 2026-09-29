@@ -63,6 +63,7 @@ function pageRecord(index) {
       highlightLayer: null,
       page: null,
       renderTask: null,
+      stale: false,
       baseWidth: 0,
       baseHeight: 0,
       rendered: false,
@@ -135,12 +136,32 @@ function layoutAllPages() {
   }
 }
 
+function cancelRenderTask(record) {
+  const task = record.renderTask;
+  if (!task) return;
+  task.cancelled = true;
+  task.canvasTask?.cancel();
+  record.renderTask = null;
+  record.textLayer?.cancel?.();
+  record.textLayer = null;
+  record.page?.cleanup();
+  record.page = null;
+}
+
 function renderScaleChanged() {
   postMessage({ type: 'viewportChanged' });
   state.preparedSelection = null;
   window.hoshiSelection?.clearSelection();
-  for (const index of state.activePages) discardPage(index);
   layoutAllPages();
+  // Cancel in-flight work (it has no pixels on screen yet) but keep finished
+  // pages showing until their new scale renders: discarding first is what
+  // flashed empty and opaque-black fresh canvases on every zoom step.
+  for (const index of state.activePages) {
+    const record = pageRecord(index);
+    cancelRenderTask(record);
+    record.stale = true;
+    renderPage(index);
+  }
 }
 
 function visibleRange() {
@@ -177,7 +198,8 @@ function scheduleRender(first, last) {
 function renderPage(index) {
   if (!state.pdf) return;
   const record = pageRecord(index);
-  if (record.rendered || record.renderTask) return;
+  if (record.renderTask) return;
+  if (record.rendered && !record.stale) return;
   const scale = currentCssScale();
   const task = { cancelled: false, canvasTask: null };
   record.renderTask = task;
@@ -191,12 +213,9 @@ function renderPage(index) {
       record.page = page;
       const viewport = viewportFor(page, scale);
       const div = pageDiv(record);
-      if (!record.canvas) {
-        const canvas = document.createElement('canvas');
-        div.appendChild(canvas);
-        record.canvas = canvas;
-      }
-      const canvas = record.canvas;
+      // Render into a detached canvas so the previous scale keeps showing
+      // until the new pixels are ready to swap in atomically.
+      const canvas = document.createElement('canvas');
       canvas.style.width = `${viewport.width}px`;
       canvas.style.height = `${viewport.height}px`;
       const outputScale = Math.min(
@@ -216,8 +235,20 @@ function renderPage(index) {
       await task.canvasTask.promise;
       if (task.cancelled) return;
       await renderTextLayer(record, page, viewport);
-      if (task.cancelled) return;
+      if (task.cancelled || record.renderTask !== task) return;
+      record.renderTask = null;
+      if (Math.abs(scale - currentCssScale()) > 0.0001) {
+        // Zoom moved on mid-render: the pixels just produced are already
+        // stale, so keep showing the previous canvas and render again.
+        record.stale = true;
+        renderPage(index);
+        return;
+      }
+      record.canvas?.remove();
+      record.canvas = canvas;
+      div.insertBefore(canvas, record.textLayerDiv);
       record.rendered = true;
+      record.stale = false;
       applyHighlightsToPage(record);
       reportReady();
     } catch (error) {
@@ -233,17 +264,12 @@ function renderPage(index) {
 }
 
 async function renderTextLayer(record, page, viewport) {
-  let div = record.textLayerDiv;
-  if (!div) {
-    // A paragraph scopes shared lookup/sentence traversal to this PDF page.
-    div = document.createElement('p');
-    div.className = 'hoshi-pdf-text-layer textLayer';
-    div.dataset.pageIndex = String(record.index);
-    record.div.appendChild(div);
-    record.textLayerDiv = div;
-  }
-  record.textLayer?.cancel?.();
-  div.textContent = '';
+  // Build detached so the previous spans keep showing until the new layer
+  // is ready to swap in atomically.
+  // A paragraph scopes shared lookup/sentence traversal to this PDF page.
+  const div = document.createElement('p');
+  div.className = 'hoshi-pdf-text-layer textLayer';
+  div.dataset.pageIndex = String(record.index);
   div.style.setProperty('--scale-factor', String(viewport.scale));
   const textLayer = new pdfjsLib.TextLayer({
     textContentSource: page.streamTextContent(),
@@ -253,6 +279,9 @@ async function renderTextLayer(record, page, viewport) {
   record.textLayer = textLayer;
   await textLayer.render();
   if (record.textLayer !== textLayer) return;
+  record.textLayerDiv?.remove();
+  record.textLayerDiv = div;
+  record.div.appendChild(div);
   // DOM text concatenation deliberately gives PDF line-break elements no offset.
   const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let offset = 0;
@@ -288,6 +317,7 @@ function discardPage(index) {
     record.canvas = null;
   }
   record.rendered = false;
+  record.stale = false;
   record.page?.cleanup();
   record.page = null;
   state.activePages.delete(index);
