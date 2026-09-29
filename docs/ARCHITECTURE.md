@@ -286,10 +286,12 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
 - PDF books read through a separate Android-only WebView reader backed by the
   vendored offline pdf.js runtime under `app/src/main/assets/hoshi-web/pdfjs`.
   It renders a lazy page window with fit-width/button/pinch zoom, persists the
-  page index through the shared bookmark sidecar, and reuses the shared lookup
-  popup stack, highlight sidecars (page index as `character`), and reading
-  statistics. PDF has no TOC, book search, or Sasayaki matching; its
-  `bookinfo.json` shims `characterCount` as the page count.
+  page index through the shared bookmark sidecar, and reuses the shared reader
+  chrome (title/progress bubble, bottom menu, focus mode, system bars, volume
+  keys), lookup popup stack, highlight sidecars (page index as `character`),
+  and reading statistics. Its Go-To sheet offers a page slider and zoom
+  controls instead of EPUB chapters. PDF has no TOC, book search, or Sasayaki
+  matching; its `bookinfo.json` shims `characterCount` as the page count.
 - Reader `bookinfo.json` sidecars persist whole-book/spine character counts plus
   optional iOS-compatible TOC fragment offsets and a first-appearance raster
   image inventory. A reader-facts schema version invalidates stale derived

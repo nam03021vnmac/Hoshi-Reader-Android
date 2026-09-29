@@ -282,6 +282,7 @@ internal fun ReaderRouteDestination(
                         routeReaderSettings = transform(routeReaderSettings)
                         onReaderSettingsChange(transform)
                     },
+                    onReaderKeyEventHandlerChange = onReaderKeyEventHandlerChange,
                     onSaveBookmark = { pageIndex, progress, statistics ->
                         autoSyncExportController.launchSave {
                             try {

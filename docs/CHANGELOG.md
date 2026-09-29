@@ -10,9 +10,11 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
 
 - Import and read PDF books alongside EPUB, from files, folders, or shared PDF
   documents. PDF books render through the bundled offline reader with restored
-  page position, fit-width and pinch zoom, tap lookup with recursive popups,
-  highlights, reading statistics, bookshelf covers, and PDF export. Book
-  search, Contents, and Sasayaki audiobook matching remain EPUB-only.
+  page position, the shared EPUB-style chrome with focus mode and menu, a Go-To
+  sheet with page slider and zoom, volume-key page turning, tap lookup with
+  recursive popups, highlights, reading statistics, bookshelf covers, and PDF
+  export. Book search, Contents, and Sasayaki audiobook matching remain
+  EPUB-only.
 - Add a Sasayaki setting that starts audiobook playback from the double-tapped reader line
   and keeps playing forward, without flashing a dictionary popup. While this setting is
   armed with an audiobook loaded, single-tap lookup waits briefly to confirm the tap is

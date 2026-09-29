@@ -1,8 +1,11 @@
 package moe.antimony.hoshi.features.reader
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Rect
 import android.view.ActionMode
+import android.view.KeyEvent
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
@@ -20,23 +23,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.FitScreen
-import androidx.compose.material.icons.rounded.Remove
-import androidx.compose.material.icons.rounded.Timer
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -54,9 +42,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.io.File
@@ -98,6 +90,8 @@ import moe.antimony.hoshi.features.dictionary.dismissPopupAt
 import moe.antimony.hoshi.features.dictionary.lookupOptions
 import moe.antimony.hoshi.features.dictionary.openPopupExternalLink
 import moe.antimony.hoshi.features.dictionary.withLookupPopupVisualOptions
+import moe.antimony.hoshi.features.display.DisplaySettingsSheet
+import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
 import kotlin.math.roundToInt
 
@@ -113,6 +107,7 @@ internal fun PdfReaderWebView(
     initialProgress: Double = 0.0,
     readerSettings: ReaderSettings = ReaderSettings(),
     onReaderSettingsChange: ((ReaderSettings) -> ReaderSettings) -> Unit = {},
+    onReaderKeyEventHandlerChange: (((KeyEvent) -> Boolean)?) -> Unit = {},
     onSaveBookmark: (pageIndex: Int, progress: Double, statistics: List<ReadingStatistics>?) -> Unit = { _, _, _ -> },
     onFlushAutoSyncExport: () -> Unit = {},
     onForegroundAutoSyncImport: () -> Unit = {},
@@ -121,7 +116,9 @@ internal fun PdfReaderWebView(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val appContainer = LocalHoshiUiDependencies.current
+    val profileState by appContainer.profileRepository.state.collectAsStateWithLifecycle()
     val systemDarkTheme = isSystemInDarkTheme()
     val effectiveSettings = readerSettings
     val scope = rememberCoroutineScope()
@@ -129,10 +126,23 @@ internal fun PdfReaderWebView(
     val dictionaryRepository = appContainer.dictionaryRepository
     val dictionarySettingsRepository = appContainer.dictionarySettingsRepository
     val audioSettingsRepository = appContainer.audioSettingsRepository
+    val sasayakiSettingsRepository = appContainer.sasayakiSettingsRepository
     val statisticsDateProvider = appContainer.statisticsDateProvider
     val fontManager = appContainer.readerFontManager
     val ankiViewModel: AnkiViewModel = hiltViewModel()
     val ankiUiState by ankiViewModel.uiState.collectAsStateWithLifecycle()
+    var sasayakiSettings by remember { mutableStateOf(SasayakiSettings()) }
+    LaunchedEffect(sasayakiSettingsRepository) {
+        sasayakiSettingsRepository.settings.collect { settings ->
+            sasayakiSettings = settings
+        }
+    }
+    fun updateSasayakiSettings(settings: SasayakiSettings) {
+        sasayakiSettings = settings
+        scope.launch {
+            sasayakiSettingsRepository.update { settings }
+        }
+    }
 
     var webView by remember { mutableStateOf<HoshiPdfReaderWebView?>(null) }
     var webViewGeneration by remember { mutableIntStateOf(0) }
@@ -141,6 +151,12 @@ internal fun PdfReaderWebView(
     var zoomFactor by remember { mutableDoubleStateOf(1.0) }
     var isReaderReady by remember(book) { mutableStateOf(false) }
     var loadFailed by remember(book) { mutableStateOf(false) }
+    var focusMode by remember { mutableStateOf(false) }
+    var showReaderMenu by remember { mutableStateOf(false) }
+    var showAppearance by remember { mutableStateOf(false) }
+    var showDisplaySettings by remember { mutableStateOf(false) }
+    var showGoTo by remember { mutableStateOf(false) }
+    val progressDisplay = readerProgressDisplay(contentLanguageProfile)
 
     var dictionarySettings by remember { mutableStateOf(DictionarySettings()) }
     var audioSettings by remember { mutableStateOf(AudioSettings()) }
@@ -231,6 +247,25 @@ internal fun PdfReaderWebView(
             tracker.start(currentCharacterCount())
             syncStatisticsState()
         }
+    }
+
+    // ---- Focus mode and reader menu -------------------------------------------
+    fun enterFocusMode() {
+        focusMode = true
+        showReaderMenu = false
+    }
+    fun toggleFocusMode() {
+        focusMode = !focusMode
+        if (focusMode) {
+            showReaderMenu = false
+        }
+    }
+    fun handleBackNavigation(): Boolean {
+        if (focusMode) {
+            focusMode = false
+            return false
+        }
+        return true
     }
     LaunchedEffect(statisticsTracker, isReaderReady, effectiveSettings.statisticsAutostartOnBookOpen) {
         if (isReaderReady && effectiveSettings.statisticsAutostartOnBookOpen && statisticsTracker?.state?.isTracking == false) {
@@ -607,6 +642,7 @@ internal fun PdfReaderWebView(
         if (lookupPopups.isEmpty()) {
             rootSelectionHighlight = null
             webView?.evaluateJavascript(ReaderSelectionCommand.ClearSelection.source, null)
+            toggleFocusMode()
         } else {
             closeLookupPopupsAndSelection()
         }
@@ -699,6 +735,7 @@ internal fun PdfReaderWebView(
                 val nextIndex = message.pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
                 if (nextIndex != pageIndex) {
                     closeLookupPopupsAndSelection()
+                    enterFocusMode()
                     startStatisticsForPageChangeIfNeeded()
                     pageIndex = nextIndex
                     recordStatisticsAtPage()
@@ -732,7 +769,97 @@ internal fun PdfReaderWebView(
         onFlushAutoSyncExport()
         onClose()
     }
-    BackHandler(onBack = ::closeReader)
+    fun jumpToPageIndex(target: Int) {
+        val clamped = target.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+        closeLookupPopupsAndSelection()
+        webView?.evaluateJavascript(pdfJumpToPageInvocation(clamped), null)
+    }
+    fun turnPdfPage(direction: ReaderNavigationDirection) {
+        when (direction) {
+            ReaderNavigationDirection.Forward -> jumpToPageIndex(pageIndex + 1)
+            ReaderNavigationDirection.Backward -> jumpToPageIndex(pageIndex - 1)
+        }
+    }
+    BackHandler {
+        if (handleBackNavigation()) {
+            closeReader()
+        }
+    }
+    val currentReaderKeyHandler = rememberUpdatedState<(KeyEvent) -> Boolean> { event ->
+        val keyEvent = readerHardwareKeyEventForKeyEvent(
+            keyCode = event.keyCode,
+            action = event.action,
+            repeatCount = event.repeatCount,
+            settings = effectiveSettings,
+            sasayakiEnabled = false,
+            hasSasayakiAudio = false,
+            hasLookupPopup = lookupPopups.isNotEmpty(),
+        )
+        if (!keyEvent.consumed) return@rememberUpdatedState false
+        when (val action = keyEvent.action) {
+            is ReaderHardwareKeyAction.ReaderNavigation -> turnPdfPage(action.direction)
+            is ReaderHardwareKeyAction.PopupTermNavigation -> {
+                val direction = when (action.direction) {
+                    PopupTermNavigationDirection.Previous -> "previous"
+                    PopupTermNavigationDirection.Next -> "next"
+                }
+                webView?.evaluateJavascript(
+                    "window.hoshiReaderPopupHost && window.hoshiReaderPopupHost.navigateTopTerm('$direction')",
+                    null,
+                )
+            }
+            else -> Unit
+        }
+        true
+    }
+    DisposableEffect(onReaderKeyEventHandlerChange) {
+        onReaderKeyEventHandlerChange { event -> currentReaderKeyHandler.value(event) }
+        onDispose { onReaderKeyEventHandlerChange(null) }
+    }
+    val useDarkSystemBarIcons = effectiveSettings.usesDarkSystemBarIcons(systemDarkTheme)
+    DisposableEffect(context, view, useDarkSystemBarIcons) {
+        val activity = context.findActivity()
+        val controller = activity?.window?.let { window ->
+            WindowCompat.getInsetsController(window, view)
+        }
+        controller?.isAppearanceLightStatusBars = useDarkSystemBarIcons
+        controller?.isAppearanceLightNavigationBars = useDarkSystemBarIcons
+        onDispose {
+            controller?.isAppearanceLightStatusBars = useDarkSystemBarIcons
+            controller?.isAppearanceLightNavigationBars = useDarkSystemBarIcons
+        }
+    }
+    DisposableEffect(context, view) {
+        val activity = context.findActivity()
+        val controller = activity?.window?.let { window ->
+            WindowCompat.getInsetsController(window, view)
+        }
+        val previousBehavior = controller?.systemBarsBehavior
+        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        onDispose {
+            if (previousBehavior != null) {
+                controller.systemBarsBehavior = previousBehavior
+            }
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+    LaunchedEffect(context, view, focusMode) {
+        val activity = context.findActivity()
+        val controller = activity?.window?.let { window ->
+            WindowCompat.getInsetsController(window, view)
+        } ?: return@LaunchedEffect
+        val visibility = readerSystemBarVisibility(focusMode)
+        if (visibility.showStatusBar) {
+            controller.show(WindowInsetsCompat.Type.statusBars())
+        } else {
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+        }
+        if (visibility.showNavigationBar) {
+            controller.show(WindowInsetsCompat.Type.navigationBars())
+        } else {
+            controller.hide(WindowInsetsCompat.Type.navigationBars())
+        }
+    }
     DisposableEffect(bookId) {
         onDispose {
             bookmarkSaveJob?.cancel()
@@ -756,7 +883,54 @@ internal fun PdfReaderWebView(
     }
 
     val backgroundColor = Color(effectiveSettings.backgroundColor(systemDarkTheme))
-    val chromeContentColor = Color(readerChromeColors(effectiveSettings, systemDarkTheme).infoText)
+    val chromeColors = readerChromeColors(effectiveSettings, systemDarkTheme)
+    val chromeState = remember(book, pageIndex, pageCount, statisticsState) {
+        val displayPage = pdfDisplayPage(pageIndex, pageCount)
+        ReaderChromeState(
+            title = book.title,
+            currentCharacter = displayPage,
+            totalCharacters = pageCount,
+            chapterCurrentCharacter = displayPage,
+            chapterTotalCharacters = pageCount,
+            statistics = statisticsState?.session?.let {
+                ReaderStatisticsChromeState(
+                    readingSpeed = it.lastReadingSpeed,
+                    readingTimeSeconds = it.readingTime,
+                )
+            },
+        )
+    }
+    val topChromeMetrics = readerTopChromeMetrics(effectiveSettings.topSafeAreaDp)
+    val bottomChromeMetrics = readerBottomChromeMetrics(effectiveSettings.bottomSafeAreaDp)
+    val currentStatusBarPadding = rememberCurrentStatusBarPadding()
+    val stableStatusBarPadding = rememberStableStatusBarPadding()
+    val currentStatusBarPaddingDp = currentStatusBarPadding.value.roundToInt().coerceAtLeast(0)
+    val stableStatusBarPaddingDp = stableStatusBarPadding.value.roundToInt().coerceAtLeast(0)
+    val topInfoPadding = readerTopInfoOverlayPaddingDp(
+        topSystemInsetDp = currentStatusBarPaddingDp,
+        focusMode = focusMode,
+        settings = effectiveSettings,
+    ).dp
+    val chromeLayout = readerChromeLayout(
+        chromeState,
+        effectiveSettings,
+        progressDisplay = progressDisplay,
+    )
+    val chromeVisibility = readerChromeVisibility(
+        focusMode = focusMode,
+        hasStatisticsToggle = effectiveSettings.showStatisticsToggle,
+        hasSasayakiToggle = false,
+        hasBackJump = false,
+        hasForwardJump = false,
+    )
+    val topInfoVisibility = chromeVisibility.copy(
+        showTitleAndProgress = chromeVisibility.showTitleAndProgress &&
+            readerShouldShowTitleAndProgress(
+                focusMode = focusMode,
+                currentStatusBarInsetDp = currentStatusBarPaddingDp,
+                stableStatusBarInsetDp = stableStatusBarPaddingDp,
+            ),
+    )
 
     Box(
         modifier = modifier
@@ -828,43 +1002,106 @@ internal fun PdfReaderWebView(
             )
         }
 
-        PdfReaderTopBar(
-            title = book.title,
-            backgroundColor = backgroundColor,
-            contentColor = chromeContentColor,
-            showStatisticsToggle = effectiveSettings.showStatisticsToggle,
+        ReaderTopInfo(
+            state = chromeState,
+            settings = effectiveSettings,
+            progressDisplay = progressDisplay,
+            colors = chromeColors,
+            onStatisticsToggle = if (effectiveSettings.showStatisticsToggle) {
+                ::toggleStatisticsTracking
+            } else {
+                null
+            },
             statisticsTracking = statisticsState?.isTracking == true,
-            onStatisticsToggle = ::toggleStatisticsTracking,
-            onClose = ::closeReader,
-            modifier = Modifier.align(Alignment.TopCenter),
+            onJumpBack = null,
+            onJumpForward = null,
+            onSasayakiToggle = null,
+            sasayakiPlaying = false,
+            visibility = topInfoVisibility,
+            metrics = topChromeMetrics,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = topInfoPadding)
+                .padding(horizontal = 15.dp),
         )
-        PdfReaderBottomBar(
+        ReaderBottomSafeProgress(
+            state = chromeState,
+            settings = effectiveSettings,
+            progressDisplay = progressDisplay,
+            colors = chromeColors,
+            metrics = bottomChromeMetrics,
+            focusMode = focusMode,
+            sasayakiPlaybackControls = ReaderSasayakiBottomPlaybackControls(
+                visible = false,
+                rowHeightDp = 0,
+                buttonWidthDp = 0,
+                iconSizeDp = 0,
+                horizontalPaddingDp = 0,
+            ),
+            sasayakiPlaying = false,
+            onTapSafeArea = ::handleReaderTapOutside,
+            onSasayakiSkipBackward = {},
+            onSasayakiTogglePlayback = {},
+            onSasayakiSkipForward = {},
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+        if (chromeVisibility.showBottomChrome) {
+            ReaderBottomChrome(
+                state = chromeState,
+                settings = effectiveSettings,
+                layout = chromeLayout,
+                progressDisplay = progressDisplay,
+                colors = chromeColors,
+                onClose = ::closeReader,
+                onMenu = { showReaderMenu = !showReaderMenu },
+                menuExpanded = showReaderMenu,
+                onDismissMenu = { showReaderMenu = false },
+                onGoTo = { showReaderMenu = false; showGoTo = true },
+                onDisplaySettings = { showReaderMenu = false; showDisplaySettings = true },
+                onReadingSettings = { showReaderMenu = false; showAppearance = true },
+                onStatistics = { showReaderMenu = false; showStatistics = true },
+                onSasayaki = null,
+                metrics = bottomChromeMetrics,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
+    }
+
+    if (showGoTo) {
+        PdfGoToSheet(
             pageIndex = pageIndex,
             pageCount = pageCount,
             zoomFactor = zoomFactor,
-            backgroundColor = backgroundColor,
-            contentColor = chromeContentColor,
-            onPageJump = { target ->
-                closeLookupPopupsAndSelection()
-                webView?.evaluateJavascript(pdfJumpToPageInvocation(target), null)
-            },
+            progressDisplay = progressDisplay,
+            onPageJump = ::jumpToPageIndex,
             onZoomIn = { webView?.evaluateJavascript("window.hoshiPdfReader.zoomIn()", null) },
             onZoomOut = { webView?.evaluateJavascript("window.hoshiPdfReader.zoomOut()", null) },
             onFitWidth = { webView?.evaluateJavascript("window.hoshiPdfReader.fitWidth()", null) },
-            onStatistics = {
-                showStatistics = true
-            },
-            modifier = Modifier.align(Alignment.BottomCenter),
+            onDismiss = { showGoTo = false },
         )
     }
-
+    if (showAppearance) {
+        ReaderAppearanceSheet(
+            settings = effectiveSettings,
+            profileName = profileState.effectiveProfile.name,
+            progressDisplay = progressDisplay,
+            onSettingsChange = onReaderSettingsChange,
+            sasayakiSettings = sasayakiSettings,
+            onSasayakiSettingsChange = ::updateSasayakiSettings,
+            fontManager = fontManager,
+            onDismiss = { showAppearance = false },
+        )
+    }
+    if (showDisplaySettings) {
+        DisplaySettingsSheet(onDismiss = { showDisplaySettings = false })
+    }
     if (showStatistics && statisticsTracker != null) {
         ReaderStatisticsSheet(
             state = statisticsState ?: statisticsTracker.state,
             currentCharacter = currentCharacterCount(),
             currentChapterEndCharacter = pageCount,
             totalCharacters = pageCount,
-            progressDisplay = readerProgressDisplay(contentLanguageProfile),
+            progressDisplay = progressDisplay,
             onToggleTracking = ::toggleStatisticsTracking,
             onDismiss = { showStatistics = false },
         )
@@ -1403,127 +1640,8 @@ private class PdfHighlightActionModeCallback(
     }
 }
 
-@Composable
-private fun PdfReaderTopBar(
-    title: String,
-    backgroundColor: Color,
-    contentColor: Color,
-    showStatisticsToggle: Boolean,
-    statisticsTracking: Boolean,
-    onStatisticsToggle: () -> Unit,
-    onClose: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = backgroundColor.copy(alpha = 0.92f),
-        contentColor = contentColor,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onClose) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = stringResource(R.string.action_close),
-                )
-            }
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 8.dp),
-                maxLines = 1,
-            )
-            if (showStatisticsToggle) {
-                IconButton(onClick = onStatisticsToggle) {
-                    Icon(
-                        imageVector = if (statisticsTracking) Icons.Rounded.Timer else Icons.Rounded.Timer,
-                        contentDescription = if (statisticsTracking) {
-                            stringResource(R.string.reader_statistics_pause)
-                        } else {
-                            stringResource(R.string.reader_statistics_start)
-                        },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PdfReaderBottomBar(
-    pageIndex: Int,
-    pageCount: Int,
-    zoomFactor: Double,
-    backgroundColor: Color,
-    contentColor: Color,
-    onPageJump: (Int) -> Unit,
-    onZoomIn: () -> Unit,
-    onZoomOut: () -> Unit,
-    onFitWidth: () -> Unit,
-    onStatistics: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = backgroundColor.copy(alpha = 0.92f),
-        contentColor = contentColor,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 2.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "${pageIndex + 1} / $pageCount",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    text = "  ${(zoomFactor * 100).roundToInt()}%",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = contentColor.copy(alpha = 0.7f),
-                )
-                Box(modifier = Modifier.weight(1f))
-                IconButton(onClick = onZoomOut) {
-                    Icon(
-                        imageVector = Icons.Rounded.Remove,
-                        contentDescription = stringResource(R.string.pdf_zoom_out),
-                    )
-                }
-                IconButton(onClick = onFitWidth) {
-                    Icon(
-                        imageVector = Icons.Rounded.FitScreen,
-                        contentDescription = stringResource(R.string.pdf_fit_width),
-                    )
-                }
-                IconButton(onClick = onZoomIn) {
-                    Icon(
-                        imageVector = Icons.Rounded.Add,
-                        contentDescription = stringResource(R.string.pdf_zoom_in),
-                    )
-                }
-                IconButton(onClick = onStatistics) {
-                    Icon(
-                        imageVector = Icons.Rounded.Timer,
-                        contentDescription = stringResource(R.string.reader_statistics),
-                    )
-                }
-            }
-            Slider(
-                value = pageIndex.toFloat().coerceIn(0f, (pageCount - 1).coerceAtLeast(0).toFloat()),
-                onValueChange = { value -> onPageJump(value.roundToInt()) },
-                valueRange = 0f..(pageCount - 1).coerceAtLeast(1).toFloat(),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
