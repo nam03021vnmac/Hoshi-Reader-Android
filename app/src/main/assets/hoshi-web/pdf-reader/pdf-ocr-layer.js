@@ -221,7 +221,9 @@
 
   /**
    * Range-to-geometry projection for tap anchoring and highlight quads when
-   * browser font metrics cannot align precisely with the scan.
+   * browser font metrics cannot align precisely with the scan. Spans are
+   * whole detection lines, so a partial-line range is subdivided along the
+   * reading direction instead of returning the full line box.
    */
   function projectRangeToCssRect(spans, startUtf16, endUtf16, cssWidth, cssHeight) {
     if (!Array.isArray(spans) || spans.length === 0) return null;
@@ -234,16 +236,156 @@
     let hit = false;
     for (const span of spans) {
       if (!span || span.endUtf16 <= startUtf16 || span.startUtf16 >= endUtf16) continue;
-      if (!span.quad || !quadIsUsable(span.quad)) continue;
-      const rect = quadBoundingRect(span.quad);
-      left = Math.min(left, rect.left * cssWidth);
-      top = Math.min(top, rect.top * cssHeight);
-      right = Math.max(right, rect.right * cssWidth);
-      bottom = Math.max(bottom, rect.bottom * cssHeight);
+      const sub = subdivideSpanRect(span, startUtf16, endUtf16);
+      if (!sub) continue;
+      left = Math.min(left, sub.left * cssWidth);
+      top = Math.min(top, sub.top * cssHeight);
+      right = Math.max(right, sub.right * cssWidth);
+      bottom = Math.max(bottom, sub.bottom * cssHeight);
       hit = true;
     }
     if (!hit) return null;
     return { x: left, y: top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
+  }
+
+  /**
+   * Tight normalized rect for the overlap of [rangeStart, rangeEnd) with one
+   * line span. Character widths are estimated uniformly along the reading
+   * direction (exact for full-width CJK, approximate otherwise); without a
+   * matching span text the full line box is returned as before.
+   */
+  function subdivideSpanRect(span, rangeStart, rangeEnd) {
+    const quad = span && span.quad;
+    if (!quad || !quadIsUsable(quad)) return null;
+    const rect = quadBoundingRect(quad);
+    const spanLen = span.endUtf16 - span.startUtf16;
+    const localStart = Math.max(rangeStart, span.startUtf16) - span.startUtf16;
+    const localEnd = Math.min(rangeEnd, span.endUtf16) - span.startUtf16;
+    if (localEnd <= localStart) return null;
+    const text = typeof span.text === 'string' ? span.text : null;
+    if (!text || text.length !== spanLen || spanLen <= 0) return rect;
+    const f0 = localStart / spanLen;
+    const f1 = localEnd / spanLen;
+    const vertical = (rect.bottom - rect.top) > (rect.right - rect.left) * 1.8;
+    if (vertical) {
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top + (rect.bottom - rect.top) * f0,
+        bottom: rect.top + (rect.bottom - rect.top) * f1,
+      };
+    }
+    return {
+      left: rect.left + (rect.right - rect.left) * f0,
+      right: rect.left + (rect.right - rect.left) * f1,
+      top: rect.top,
+      bottom: rect.bottom,
+    };
+  }
+
+  /**
+   * Remove nested partial-range highlight marks, restoring plain text nodes.
+   * Whole-span paint needs no DOM repair. Returns true when nodes were
+   * unwrapped and the caller must rebuild its text-node offsets.
+   */
+  function clearHighlightMarks(document, layer) {
+    if (!layer || typeof layer.querySelectorAll !== 'function') return false;
+    const nested = [];
+    const marks = layer.querySelectorAll('span[data-hoshi-highlight-id]');
+    for (const mark of marks) {
+      if (mark && mark.parentElement !== layer) nested.push(mark);
+    }
+    for (const mark of nested) {
+      const parent = mark.parentNode;
+      if (!parent) continue;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+    }
+    if (nested.length === 0) return false;
+    if (typeof layer.normalize === 'function') layer.normalize();
+    return true;
+  }
+
+  /** Re-walk text nodes in document order with sequential UTF-16 offsets. */
+  function rebuildTextNodes(document, layer) {
+    const entries = [];
+    const walker = document.createTreeWalker(layer, 4 /* NodeFilter.SHOW_TEXT */);
+    let offset = 0;
+    let node = null;
+    while ((node = walker.nextNode())) {
+      const length = node.textContent ? node.textContent.length : 0;
+      entries.push({ node, start: offset, end: offset + length });
+      offset += length;
+    }
+    return entries;
+  }
+
+  /**
+   * Paint one highlight entry, splitting text nodes at partial overlaps so
+   * only the selected run gets a background. Whole-node overlaps keep the
+   * existing whole-span paint. Mutates `textNodes` in place to track splits;
+   * concatenated text and offsets are unchanged.
+   *
+   * entry: { id, offset, text, background }.
+   */
+  function paintHighlightEntry(document, layer, textNodes, entry) {
+    if (!document || !layer || !Array.isArray(textNodes) || !entry) return;
+    if (typeof entry.offset !== 'number' || typeof entry.text !== 'string' || !entry.text.length) return;
+    const end = entry.offset + entry.text.length;
+    let index = 0;
+    while (index < textNodes.length) {
+      const part = textNodes[index];
+      if (part.start >= end) break;
+      if (part.end <= entry.offset || part.end === part.start) {
+        index += 1;
+        continue;
+      }
+      index = paintHighlightPart(document, textNodes, index, entry, end);
+    }
+  }
+
+  function paintHighlightPart(document, textNodes, index, entry, end) {
+    const part = textNodes[index];
+    const node = part.node;
+    const nodeLength = node && typeof node.textContent === 'string' ? node.textContent.length : 0;
+    const span = node ? node.parentElement : null;
+    if (!span || !span.dataset) return index + 1;
+    const localStart = Math.max(entry.offset, part.start) - part.start;
+    const localEnd = Math.min(end, part.end) - part.start;
+    if (localStart <= 0 && localEnd >= nodeLength) {
+      span.dataset.hoshiHighlightId = entry.id;
+      if (span.style) span.style.backgroundColor = entry.background;
+      return index + 1;
+    }
+    const start = Math.max(0, localStart);
+    const finish = Math.min(nodeLength, localEnd);
+    if (finish <= start) return index + 1;
+    const parent = node.parentNode;
+    if (!parent || typeof node.splitText !== 'function') {
+      // Cannot split: fall back to whole-span paint rather than dropping the mark.
+      span.dataset.hoshiHighlightId = entry.id;
+      if (span.style) span.style.backgroundColor = entry.background;
+      return index + 1;
+    }
+    const tail = node.splitText(finish);
+    const middle = node.splitText(start);
+    const mark = document.createElement('span');
+    mark.dataset.hoshiHighlightId = entry.id;
+    if (mark.style) {
+      mark.style.backgroundColor = entry.background;
+      // Line spans are absolutely positioned; keep the nested run inline so
+      // only the selected run paints instead of the full line box.
+      mark.style.position = 'static';
+    }
+    parent.insertBefore(mark, middle);
+    mark.appendChild(middle);
+    const fresh = [];
+    if (start > 0) fresh.push({ node, start: part.start, end: part.start + start });
+    const middleIndex = index + fresh.length;
+    fresh.push({ node: middle, start: part.start + start, end: part.start + finish });
+    if (finish < nodeLength) fresh.push({ node: tail, start: part.start + finish, end: part.end });
+    textNodes.splice(index, 1, ...fresh);
+    return index + fresh.length;
   }
 
   const api = {
@@ -251,6 +393,10 @@
     validateOcrPayload,
     buildOcrDom,
     projectRangeToCssRect,
+    subdivideSpanRect,
+    clearHighlightMarks,
+    rebuildTextNodes,
+    paintHighlightEntry,
     MAX_SPANS,
     MAX_TEXT_LENGTH,
     MAX_PAYLOAD_CHARS,

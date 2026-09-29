@@ -14,10 +14,32 @@ function loadLayer() {
 }
 
 function fakeDocument() {
-  const createTextNode = (text) => ({ nodeType: 3, textContent: text, parentNode: null, parentElement: null });
+  const createTextNode = (text) => {
+    const node = {
+      nodeType: 3,
+      textContent: text,
+      parentNode: null,
+      parentElement: null,
+      splitText(offset) {
+        const left = this.textContent.slice(0, offset);
+        const right = this.textContent.slice(offset);
+        this.textContent = left;
+        const sibling = createTextNode(right);
+        const parent = this.parentNode;
+        if (parent) {
+          const at = parent.childNodes.indexOf(this);
+          parent.childNodes.splice(at + 1, 0, sibling);
+          sibling.parentNode = parent;
+          sibling.parentElement = parent;
+        }
+        return sibling;
+      },
+    };
+    return node;
+  };
   const makeElement = (tag) => {
     const dataset = {};
-    return {
+    const element = {
       nodeType: 1,
       tagName: tag.toUpperCase(),
       childNodes: [],
@@ -38,17 +60,93 @@ function fakeDocument() {
         if (value) this.appendChild(createTextNode(value));
       },
       appendChild(child) {
+        // Real DOM moves the node: detach from any previous parent first.
+        if (child.parentNode && child.parentNode !== this) {
+          child.parentNode.removeChild(child);
+        } else if (child.parentNode === this) {
+          const at = this.childNodes.indexOf(child);
+          if (at >= 0) this.childNodes.splice(at, 1);
+        }
         this.childNodes.push(child);
         child.parentNode = this;
         child.parentElement = this;
         return child;
       },
+      insertBefore(child, ref) {
+        if (child.parentNode && child.parentNode !== this) {
+          child.parentNode.removeChild(child);
+        } else if (child.parentNode === this) {
+          const from = this.childNodes.indexOf(child);
+          if (from >= 0) this.childNodes.splice(from, 1);
+        }
+        const at = ref ? this.childNodes.indexOf(ref) : -1;
+        if (at < 0) return this.appendChild(child);
+        this.childNodes.splice(at, 0, child);
+        child.parentNode = this;
+        child.parentElement = this;
+        return child;
+      },
+      removeChild(child) {
+        const at = this.childNodes.indexOf(child);
+        if (at >= 0) this.childNodes.splice(at, 1);
+        child.parentNode = null;
+        child.parentElement = null;
+        return child;
+      },
+      querySelectorAll(selector) {
+        const found = [];
+        const walk = (node) => {
+          for (const child of node.childNodes ?? []) {
+            if (child.nodeType === 1) {
+              if (selector === 'span[data-hoshi-highlight-id]' &&
+                child.tagName === 'SPAN' && child.dataset.hoshiHighlightId !== undefined) {
+                found.push(child);
+              }
+              walk(child);
+            }
+          }
+        };
+        walk(this);
+        return found;
+      },
+      normalize() {
+        const merge = (node) => {
+          for (const child of node.childNodes ?? []) {
+            if (child.nodeType === 1) merge(child);
+          }
+          const merged = [];
+          for (const child of node.childNodes ?? []) {
+            const last = merged[merged.length - 1];
+            if (child.nodeType === 3 && last && last.nodeType === 3) {
+              last.textContent += child.textContent;
+            } else {
+              merged.push(child);
+            }
+          }
+          node.childNodes = merged;
+        };
+        merge(this);
+      },
       setAttribute() {},
     };
+    return element;
+  };
+  const createTreeWalker = (root) => {
+    const nodes = [];
+    const walk = (node) => {
+      for (const child of node.childNodes ?? []) {
+        if (child.nodeType === 3) nodes.push(child);
+        else walk(child);
+      }
+    };
+    walk(root);
+    let at = -1;
+    return { nextNode() { at += 1; return nodes[at] ?? null; } };
   };
   return {
     createElement: makeElement,
     createTextNode,
+    createTreeWalker,
   };
 }
 
@@ -158,4 +256,82 @@ test('range projection uses OCR quads, not font metrics', () => {
   assert.equal(Math.round(rect.x), Math.round(0.1 * 450));
   assert.equal(layer.projectRangeToCssRect(spans, 5, 9, 450, 600), null);
   assert.equal(layer.projectRangeToCssRect([], 0, 1, 450, 600), null);
+});
+
+test('range projection subdivides partial-line selections instead of the full line box', () => {
+  const layer = loadLayer();
+  const quad = { x0: 0.1, y0: 0.1, x1: 0.9, y1: 0.1, x2: 0.9, y2: 0.2, x3: 0.1, y3: 0.2 };
+  const spans = [{ sourceId: 'l0', startUtf16: 0, endUtf16: 4, text: 'あいうえ', quad }];
+  const full = layer.projectRangeToCssRect(spans, 0, 4, 450, 600);
+  assert.equal(Math.round(full.x), Math.round(0.1 * 450));
+  assert.equal(Math.round(full.width), Math.round(0.8 * 450));
+  // Middle two of four characters: tight middle half, full height.
+  const mid = layer.projectRangeToCssRect(spans, 1, 3, 450, 600);
+  assert.equal(Math.round(mid.x), Math.round(0.3 * 450));
+  assert.equal(Math.round(mid.width), Math.round(0.4 * 450));
+  assert.equal(Math.round(mid.y), Math.round(full.y));
+  assert.equal(Math.round(mid.height), Math.round(full.height));
+  // Vertical lines subdivide top to bottom.
+  const vertical = [{ sourceId: 'v0', startUtf16: 0, endUtf16: 4, text: 'あいうえ',
+    quad: { x0: 0.7, y0: 0.1, x1: 0.8, y1: 0.1, x2: 0.8, y2: 0.9, x3: 0.7, y3: 0.9 } }];
+  const slice = layer.projectRangeToCssRect(vertical, 0, 2, 450, 600);
+  assert.equal(Math.round(slice.y), Math.round(0.1 * 600));
+  assert.equal(Math.round(slice.height), Math.round(0.4 * 600));
+  assert.equal(Math.round(slice.x), Math.round(0.7 * 450));
+  // Spans without text keep the previous whole-box behavior.
+  const legacy = layer.projectRangeToCssRect(
+    [{ sourceId: 'l0', startUtf16: 0, endUtf16: 4, quad }], 1, 3, 450, 600);
+  assert.equal(Math.round(legacy.width), Math.round(0.8 * 450));
+});
+
+function buildLineLayer() {
+  const layer = loadLayer();
+  const document = fakeDocument();
+  const payload = {
+    sessionId: 's1', pageIndex: 0, requestId: 1, revisionId: 'r1', sourceHash: 'a'.repeat(64),
+    canonicalText: 'あいうえお',
+    spans: [
+      { sourceId: 'l0', startUtf16: 0, endUtf16: 5, text: 'あいうえお',
+        quad: { x0: 0.1, y0: 0.1, x1: 0.9, y1: 0.1, x2: 0.9, y2: 0.2, x3: 0.1, y3: 0.2 } },
+    ],
+    cssWidth: 450, cssHeight: 600,
+  };
+  const built = layer.buildOcrDom(document, payload, 450, 600);
+  assert.ok(built);
+  return { layer, document, built };
+}
+
+test('partial highlight paints only the selected run, not the full line box', () => {
+  const { layer, document, built } = buildLineLayer();
+  layer.paintHighlightEntry(document, built.layer, built.textNodes,
+    { id: 'h1', offset: 1, text: 'いう', background: 'yellow' });
+  // Concatenated text and tiling offsets are unchanged.
+  assert.equal(built.layer.textContent, 'あいうえお');
+  assert.deepEqual(Array.from(built.textNodes, ({ start, end }) => [start, end]), [[0, 1], [1, 3], [3, 5]]);
+  // The line span itself stays unpainted; only the nested run carries paint.
+  const lineSpan = built.layer.childNodes[0];
+  assert.equal(lineSpan.style.backgroundColor ?? '', '');
+  assert.equal(lineSpan.dataset.hoshiHighlightId, undefined);
+  const mark = lineSpan.childNodes[1];
+  assert.equal(mark.tagName, 'SPAN');
+  assert.equal(mark.textContent, 'いう');
+  assert.equal(mark.dataset.hoshiHighlightId, 'h1');
+  assert.equal(mark.style.backgroundColor, 'yellow');
+  // Clearing restores the original single-node shape.
+  assert.equal(layer.clearHighlightMarks(document, built.layer), true);
+  const rebuilt = layer.rebuildTextNodes(document, built.layer);
+  assert.deepEqual(Array.from(rebuilt, ({ start, end }) => [start, end]), [[0, 5]]);
+  assert.equal(built.layer.textContent, 'あいうえお');
+  assert.equal(lineSpan.childNodes.length, 1);
+});
+
+test('full-line highlight keeps whole-span paint without nested marks', () => {
+  const { layer, document, built } = buildLineLayer();
+  layer.paintHighlightEntry(document, built.layer, built.textNodes,
+    { id: 'h1', offset: 0, text: 'あいうえお', background: 'yellow' });
+  const lineSpan = built.layer.childNodes[0];
+  assert.equal(lineSpan.dataset.hoshiHighlightId, 'h1');
+  assert.equal(lineSpan.style.backgroundColor, 'yellow');
+  assert.equal(lineSpan.childNodes.length, 1);
+  assert.equal(layer.clearHighlightMarks(document, built.layer), false);
 });
