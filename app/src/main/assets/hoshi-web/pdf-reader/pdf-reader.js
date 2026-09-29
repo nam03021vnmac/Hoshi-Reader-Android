@@ -383,6 +383,7 @@ function installOcrPayload(record, payload, viewport) {
   record.textLayerDiv?.remove();
   record.textLayerDiv = built.layer;
   record.div.appendChild(built.layer);
+  layerApi.fitOcrDom(document, built);
   record.textNodes = built.textNodes;
   record.pageText = built.pageText;
   record.textSource = 'ocr';
@@ -592,6 +593,9 @@ function applyHighlightsToPage(record) {
   // Marks live on the page's own text spans so lookup selection, pinch
   // previews, and re-renders share one highlight source of truth.
   const layerApi = globalThis.hoshiPdfOcrLayer;
+  if (layerApi && layerApi.clearHighlightMarks(document, record.textLayerDiv)) {
+    record.textNodes = layerApi.rebuildTextNodes(document, record.textLayerDiv);
+  }
   const spans = [];
   const seen = new Set();
   for (const part of record.textNodes) {
@@ -605,16 +609,12 @@ function applyHighlightsToPage(record) {
     if (span.dataset) delete span.dataset.hoshiHighlightId;
     if (span.style) span.style.backgroundColor = '';
   }
-  if (layerApi && layerApi.clearHighlightMarks(document, record.textLayerDiv)) {
-    record.textNodes = layerApi.rebuildTextNodes(document, record.textLayerDiv);
-  }
   for (const entry of state.highlightIndex.values()) {
     if (entry.pageIndex !== record.index) continue;
     const end = entry.offset + entry.text.length;
     if (record.pageText.slice(entry.offset, end) !== entry.text) continue;
     if (layerApi && layerApi.paintHighlightEntry) {
-      // Partial-line selections paint only the selected run; whole-node
-      // overlaps keep the existing whole-span paint.
+      // Paint only the selected run, not an expanded OCR line's layout box.
       layerApi.paintHighlightEntry(document, record.textLayerDiv, record.textNodes, {
         id: entry.id,
         offset: entry.offset,

@@ -104,11 +104,18 @@
     return payload;
   }
 
-  function spanDirection(span) {
+  function spanDirection(span, cssWidth, cssHeight) {
     if (!span.quad) return 'horizontal';
     const rect = quadBoundingRect(span.quad);
-    const width = rect.right - rect.left;
-    const height = rect.bottom - rect.top;
+    // Page-pixel comparison: normalized axes have different physical scales
+    // on non-square pages. Fall back to normalized comparison only when the
+    // caller has no usable page size.
+    const width = isFiniteNumber(cssWidth) && cssWidth > 0
+      ? (rect.right - rect.left) * cssWidth
+      : rect.right - rect.left;
+    const height = isFiniteNumber(cssHeight) && cssHeight > 0
+      ? (rect.bottom - rect.top) * cssHeight
+      : rect.bottom - rect.top;
     if (height > width * 1.8) return 'vertical';
     return 'horizontal';
   }
@@ -170,7 +177,7 @@
       pushTextWithGeometry(document, layer, textNodes, canonical.slice(cursor), null, width, height);
     }
 
-    return { layer, textNodes, pageText: layer.textContent };
+    return { layer, textNodes, pageText: layer.textContent, cssWidth: width, cssHeight: height };
   }
 
   function pushTextWithGeometry(document, layer, textNodes, text, span, width, height) {
@@ -178,8 +185,8 @@
     const element = document.createElement('span');
     // OCR strings become DOM textContent, never HTML/script fragments.
     element.textContent = text;
-    positionSpan(element, span ? span.quad : null, width, height, text);
-    const direction = span ? spanDirection(span) : 'horizontal';
+    const direction = span ? spanDirection(span, width, height) : 'horizontal';
+    const rect = positionSpan(element, span ? span.quad : null, width, height, text, direction);
     if (direction === 'vertical') {
       element.style.writingMode = 'vertical-rl';
     }
@@ -188,35 +195,75 @@
     // Mirror the pdf-reader walker shape: text node + half-open offsets.
     const textNode = element.firstChild;
     const end = start + text.length;
-    textNodes.push({ node: textNode, start, end });
+    textNodes.push({ node: textNode, start, end, rect });
   }
 
-  function positionSpan(element, quad, width, height, text) {
+  function positionSpan(element, quad, width, height, text, direction) {
     if (!quad) {
       element.style.position = 'absolute';
       return;
     }
     const rect = quadBoundingRect(quad);
-    const left = rect.left * width;
-    const top = rect.top * height;
+    let left = rect.left * width;
+    let top = rect.top * height;
     const spanWidth = Math.max(1, (rect.right - rect.left) * width);
     const spanHeight = Math.max(1, (rect.bottom - rect.top) * height);
+    const isVertical = direction === 'vertical';
+    // DB unclipping recovers the recognition crop, not character metrics.
+    // A long line's expanded thickness must not enlarge every glyph advance.
+    const length = Math.max(1, [...text].length);
+    const fontSize = Math.min(isVertical ? spanWidth : spanHeight,
+      (isVertical ? spanHeight : spanWidth) / length);
+    if (isVertical) left += (spanWidth - fontSize) / 2;
+    else top += (spanHeight - fontSize) / 2;
     element.style.position = 'absolute';
     element.style.left = left + 'px';
     element.style.top = top + 'px';
-    element.style.width = spanWidth + 'px';
-    element.style.height = spanHeight + 'px';
-    // Approximate glyph size from the observed quad; never feed fabricated
-    // font metrics into pdf.js TextLayer.
-    const length = text ? [...text].length : 1;
-    const isVertical = (rect.bottom - rect.top) > (rect.right - rect.left) * 1.8;
-    const fontSize = isVertical
-      ? Math.max(4, (spanWidth / Math.max(1, length)) * length > 0 ? spanWidth : spanWidth)
-      : Math.max(4, spanHeight * 0.9);
+    element.style.width = 'max-content';
+    element.style.height = 'max-content';
     element.style.fontSize = fontSize + 'px';
     element.style.lineHeight = '1';
     element.style.whiteSpace = 'pre';
     element.style.color = 'transparent';
+    return { left, top, width: isVertical ? fontSize : spanWidth, height: isVertical ? spanHeight : fontSize };
+  }
+
+  /**
+   * Fit actual selectable glyph bounds only after the layer is attached.
+   * Never throws: fitting only tightens selection geometry and must not
+   * break page installation when measurement APIs are unavailable.
+   */
+  function fitOcrDom(document, built) {
+    try {
+      if (!document || typeof document.createRange !== 'function') return;
+      if (!built || !built.layer || !Array.isArray(built.textNodes)) return;
+      if (typeof built.layer.getBoundingClientRect !== 'function') return;
+    const range = document.createRange();
+    // Read all geometry before writing transforms to avoid a layout per line.
+    const measured = built.textNodes.filter(part => part.rect).map(part => {
+      range.selectNodeContents(part.node);
+      const bounds = range.getClientRects()[0];
+      if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null;
+      const element = part.node.parentElement;
+      return { element, target: part.rect, bounds, origin: element.getBoundingClientRect() };
+    }).filter(Boolean);
+    if (!measured.length) return;
+    const page = built.layer.getBoundingClientRect();
+    const zoomX = page.width / built.cssWidth;
+    const zoomY = page.height / built.cssHeight;
+    if (!(zoomX > 0 && zoomY > 0)) return;
+    for (const { element, target, bounds, origin } of measured) {
+      const sx = target.width * zoomX / bounds.width;
+      const sy = target.height * zoomY / bounds.height;
+      if (!isFiniteNumber(sx) || !isFiniteNumber(sy) || sx <= 0 || sy <= 0) continue;
+      const dx = -(bounds.left - origin.left) / zoomX * sx;
+      const dy = -(bounds.top - origin.top) / zoomY * sy;
+      if (!isFiniteNumber(dx) || !isFiniteNumber(dy)) continue;
+      element.style.transform = `matrix(${sx}, 0, 0, ${sy}, ${dx}, ${dy})`;
+    }
+    } catch {
+      // Measurement is best-effort: the unfitted overlay still installs.
+    }
   }
 
   /**
@@ -236,7 +283,7 @@
     let hit = false;
     for (const span of spans) {
       if (!span || span.endUtf16 <= startUtf16 || span.startUtf16 >= endUtf16) continue;
-      const sub = subdivideSpanRect(span, startUtf16, endUtf16);
+      const sub = subdivideSpanRect(span, startUtf16, endUtf16, cssWidth, cssHeight);
       if (!sub) continue;
       left = Math.min(left, sub.left * cssWidth);
       top = Math.min(top, sub.top * cssHeight);
@@ -254,7 +301,7 @@
    * direction (exact for full-width CJK, approximate otherwise); without a
    * matching span text the full line box is returned as before.
    */
-  function subdivideSpanRect(span, rangeStart, rangeEnd) {
+  function subdivideSpanRect(span, rangeStart, rangeEnd, cssWidth, cssHeight) {
     const quad = span && span.quad;
     if (!quad || !quadIsUsable(quad)) return null;
     const rect = quadBoundingRect(quad);
@@ -266,7 +313,7 @@
     if (!text || text.length !== spanLen || spanLen <= 0) return rect;
     const f0 = localStart / spanLen;
     const f1 = localEnd / spanLen;
-    const vertical = (rect.bottom - rect.top) > (rect.right - rect.left) * 1.8;
+    const vertical = spanDirection(span, cssWidth, cssHeight) === 'vertical';
     if (vertical) {
       return {
         left: rect.left,
@@ -285,8 +332,8 @@
 
   /**
    * Remove nested partial-range highlight marks, restoring plain text nodes.
-   * Whole-span paint needs no DOM repair. Returns true when nodes were
-   * unwrapped and the caller must rebuild its text-node offsets.
+   * Returns true when nodes were unwrapped and the caller must rebuild
+   * its text-node offsets.
    */
   function clearHighlightMarks(document, layer) {
     if (!layer || typeof layer.querySelectorAll !== 'function') return false;
@@ -322,8 +369,8 @@
 
   /**
    * Paint one highlight entry, splitting text nodes at partial overlaps so
-   * only the selected run gets a background. Whole-node overlaps keep the
-   * existing whole-span paint. Mutates `textNodes` in place to track splits;
+   * only the selected run gets a background. Paint inline glyph boxes, never
+   * the positioned line's layout box. Mutates `textNodes` to track splits;
    * concatenated text and offsets are unchanged.
    *
    * entry: { id, offset, text, background }.
@@ -340,11 +387,11 @@
         index += 1;
         continue;
       }
-      index = paintHighlightPart(document, textNodes, index, entry, end);
+      index = paintHighlightPart(document, textNodes, index, entry, end, layer);
     }
   }
 
-  function paintHighlightPart(document, textNodes, index, entry, end) {
+  function paintHighlightPart(document, textNodes, index, entry, end, layer) {
     const part = textNodes[index];
     const node = part.node;
     const nodeLength = node && typeof node.textContent === 'string' ? node.textContent.length : 0;
@@ -352,7 +399,10 @@
     if (!span || !span.dataset) return index + 1;
     const localStart = Math.max(entry.offset, part.start) - part.start;
     const localEnd = Math.min(end, part.end) - part.start;
-    if (localStart <= 0 && localEnd >= nodeLength) {
+    // A previous highlight may have split this node away from other line text.
+    if (localStart <= 0 && localEnd >= nodeLength &&
+        (!layer.dataset.ocrRevision || span.dataset.hoshiHighlightId) &&
+        nodeLength === span.textContent.length) {
       span.dataset.hoshiHighlightId = entry.id;
       if (span.style) span.style.backgroundColor = entry.background;
       return index + 1;
@@ -362,9 +412,6 @@
     if (finish <= start) return index + 1;
     const parent = node.parentNode;
     if (!parent || typeof node.splitText !== 'function') {
-      // Cannot split: fall back to whole-span paint rather than dropping the mark.
-      span.dataset.hoshiHighlightId = entry.id;
-      if (span.style) span.style.backgroundColor = entry.background;
       return index + 1;
     }
     const tail = node.splitText(finish);
@@ -381,7 +428,6 @@
     mark.appendChild(middle);
     const fresh = [];
     if (start > 0) fresh.push({ node, start: part.start, end: part.start + start });
-    const middleIndex = index + fresh.length;
     fresh.push({ node: middle, start: part.start + start, end: part.start + finish });
     if (finish < nodeLength) fresh.push({ node: tail, start: part.start + finish, end: part.end });
     textNodes.splice(index, 1, ...fresh);
@@ -392,6 +438,7 @@
     classifyEmbeddedText,
     validateOcrPayload,
     buildOcrDom,
+    fitOcrDom,
     projectRangeToCssRect,
     subdivideSpanRect,
     clearHighlightMarks,

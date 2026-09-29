@@ -141,5 +141,5 @@ body {
   white-space: pre;
   cursor: text;
   transform-origin: 0% 0%;
-  overflow: hidden;
+  overflow: visible;
 }

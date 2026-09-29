@@ -563,7 +563,8 @@ test('ocr overlay tracks the displayed page scale so ruby taps hit visible glyph
   assert.equal(layer.textContent, 'しゅう');
   // Fit-width scale is 1 here, so the overlay matches the base 600x800 page.
   assert.equal(layer.children[0].style.left, '150px');
-  assert.equal(layer.children[0].style.top, '200px');
+  assert.equal(layer.children[0].style.top, '275px');
+  assert.equal(layer.children[0].style.fontSize, '50px');
 
   r.api.setZoomFactor(2);
   await r.flush();
@@ -573,7 +574,8 @@ test('ocr overlay tracks the displayed page scale so ruby taps hit visible glyph
   assert.equal(layer.textContent, 'しゅう');
   // The cached revision reinstalls at the zoomed 1200x1600 display size.
   assert.equal(layer.children[0].style.left, '300px');
-  assert.equal(layer.children[0].style.top, '400px');
-  assert.equal(layer.children[0].style.width, '300px');
-  assert.equal(layer.children[0].style.height, '400px');
+  assert.equal(layer.children[0].style.top, '550px');
+  assert.equal(layer.children[0].style.fontSize, '100px');
+  assert.equal(layer.children[0].style.width, 'max-content');
+  assert.equal(layer.children[0].style.height, 'max-content');
 });

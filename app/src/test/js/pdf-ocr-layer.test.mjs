@@ -325,13 +325,105 @@ test('partial highlight paints only the selected run, not the full line box', ()
   assert.equal(lineSpan.childNodes.length, 1);
 });
 
-test('full-line highlight keeps whole-span paint without nested marks', () => {
+test('full-line highlight paints inline glyph bounds, not the positioned layout box', () => {
   const { layer, document, built } = buildLineLayer();
   layer.paintHighlightEntry(document, built.layer, built.textNodes,
     { id: 'h1', offset: 0, text: 'あいうえお', background: 'yellow' });
   const lineSpan = built.layer.childNodes[0];
-  assert.equal(lineSpan.dataset.hoshiHighlightId, 'h1');
-  assert.equal(lineSpan.style.backgroundColor, 'yellow');
-  assert.equal(lineSpan.childNodes.length, 1);
-  assert.equal(layer.clearHighlightMarks(document, built.layer), false);
+  assert.equal(lineSpan.dataset.hoshiHighlightId, undefined);
+  const mark = lineSpan.children[0];
+  assert.equal(mark.dataset.hoshiHighlightId, 'h1');
+  assert.equal(mark.style.backgroundColor, 'yellow');
+  assert.equal(mark.style.position, 'static');
+  assert.equal(mark.textContent, built.pageText);
+  assert.equal(layer.clearHighlightMarks(document, built.layer), true);
+});
+
+test('adjacent highlights on remaining text fragments never paint the parent line', () => {
+  for (const [offset, length] of [[0, 1], [3, 2]]) {
+    const { layer, document, built } = buildLineLayer();
+    const text = built.pageText;
+    layer.paintHighlightEntry(document, built.layer, built.textNodes,
+      { id: 'middle', offset: 1, text: text.slice(1, 3), background: 'yellow' });
+    layer.paintHighlightEntry(document, built.layer, built.textNodes,
+      { id: 'adjacent', offset, text: text.slice(offset, offset + length), background: 'blue' });
+
+    const lineSpan = built.layer.firstChild;
+    assert.equal(lineSpan.dataset.hoshiHighlightId, undefined);
+    assert.equal(lineSpan.style.backgroundColor ?? '', '');
+    const marks = built.layer.querySelectorAll('span[data-hoshi-highlight-id]');
+    assert.equal(marks.length, 2);
+    assert.equal(marks.find((mark) => mark.dataset.hoshiHighlightId === 'middle').textContent, text.slice(1, 3));
+    const adjacent = marks.find((mark) => mark.dataset.hoshiHighlightId === 'adjacent');
+    assert.equal(adjacent.textContent, text.slice(offset, offset + length));
+    assert.equal(adjacent.style.backgroundColor, 'blue');
+    assert.equal(adjacent.style.position, 'static');
+    assert.equal(built.layer.textContent, text);
+    assert.deepEqual(Array.from(built.textNodes, ({ start, end }) => [start, end]), [[0, 1], [1, 3], [3, 5]]);
+  }
+});
+
+test('repeated fragment cleanup restores canonical nodes and is idempotent', () => {
+  const { layer, document, built } = buildLineLayer();
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    layer.paintHighlightEntry(document, built.layer, built.textNodes,
+      { id: 'outer', offset: 1, text: built.pageText.slice(1, 4), background: 'yellow' });
+    layer.paintHighlightEntry(document, built.layer, built.textNodes,
+      { id: 'inner', offset: 2, text: built.pageText.slice(2, 3), background: 'blue' });
+    assert.equal(layer.clearHighlightMarks(document, built.layer), true);
+    built.textNodes = layer.rebuildTextNodes(document, built.layer);
+    assertCanonicalNodes(built, built.pageText, [[0, 5]]);
+    assert.equal(built.layer.querySelectorAll('span[data-hoshi-highlight-id]').length, 0);
+    assert.equal(layer.clearHighlightMarks(document, built.layer), false);
+    assertCanonicalNodes(built, built.pageText, [[0, 5]]);
+  }
+});
+
+test('reader repaint unwraps fragments before clearing IDs across repeated updates', () => {
+  const { layer, document, built } = buildLineLayer();
+  const record = {
+    index: 0, rendered: true, textLayerDiv: built.layer,
+    textNodes: built.textNodes, pageText: built.pageText,
+  };
+  const sandbox = {
+    document: { ...document, getElementById: () => ({ addEventListener() {} }) },
+    window: { addEventListener() {} },
+    pdfjsLib: { PixelsPerInch: { PDF_TO_CSS_UNITS: 4 / 3 }, GlobalWorkerOptions: {} },
+    hoshiPdfOcrLayer: layer,
+    record,
+  };
+  vm.createContext(sandbox);
+  const readerSource = fs.readFileSync(new URL('../../main/assets/hoshi-web/pdf-reader/pdf-reader.js', import.meta.url), 'utf8');
+  vm.runInContext(readerSource.replace(/^import .*;$/m, ''), sandbox);
+  vm.runInContext('state.pages.push(record); state.activePages.add(0);', sandbox);
+
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    const highlights = [
+      { id: 'middle', character: 0, offset: 1, text: built.pageText.slice(1, 3), color: 'yellow' },
+      { id: 'tail', character: 0, offset: 3, text: built.pageText.slice(3), color: 'blue' },
+    ];
+    for (let repaint = 0; repaint < 2; repaint += 1) {
+      sandbox.applyHighlightIndex(highlights);
+      const lineSpan = built.layer.firstChild;
+      assert.equal(lineSpan.children.length, 2);
+      assert.equal(lineSpan.dataset.hoshiHighlightId, undefined);
+      assert.equal(lineSpan.style.backgroundColor ?? '', '');
+      assert.equal(built.layer.textContent, built.pageText);
+    }
+    sandbox.applyHighlightIndex([]);
+    built.textNodes = record.textNodes;
+    assertCanonicalNodes(built, built.pageText, [[0, 5]]);
+    assert.equal(built.layer.querySelectorAll('span[data-hoshi-highlight-id]').length, 0);
+
+    sandbox.applyHighlightIndex([
+      { id: 'whole', character: 0, offset: 0, text: built.pageText, color: 'yellow' },
+    ]);
+    assert.equal(built.layer.querySelectorAll('span[data-hoshi-highlight-id]')[0].dataset.hoshiHighlightId, 'whole');
+    sandbox.applyHighlightIndex([]);
+    sandbox.applyHighlightIndex([]);
+    assert.equal(built.layer.firstChild.dataset.hoshiHighlightId, undefined);
+    assert.equal(built.layer.firstChild.style.backgroundColor ?? '', '');
+    built.textNodes = record.textNodes;
+    assertCanonicalNodes(built, built.pageText, [[0, 5]]);
+  }
 });
