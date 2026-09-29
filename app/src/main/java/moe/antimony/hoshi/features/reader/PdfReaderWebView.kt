@@ -1254,21 +1254,38 @@ private fun handlePdfTap(
 ) {
     val currentWebView = webView ?: return
     if (currentWebView.isNativeSelectionActionModeActive()) return
-    if (popups.isNotEmpty() &&
-        readerLookupPopupTouchBlocksReaderGesture(
-            popups = popups.map { popup ->
-                ReaderLookupPopupFramePayload.fromPopup(
-                    popup = popup,
-                    popupIndex = 0,
-                    viewport = ReaderLookupPopupViewport(width = 1_000_000.0, height = 1_000_000.0),
-                    includeInitialEntryJson = false,
-                )
-            },
-            x = x,
-            y = y,
-        )
-    ) {
-        return
+    if (popups.isNotEmpty()) {
+        // Use the displayed WebView size so touch blocking matches the rendered
+        // popup stack. A fixed huge viewport always places the popup below the
+        // selection, while the real layout shows it above when space below is
+        // short; that mismatch incorrectly swallowed taps on other rows.
+        val density = currentWebView.resources.displayMetrics.density.takeIf { it > 0 } ?: 0f
+        val viewportWidth = if (currentWebView.width > 0 && density > 0) {
+            currentWebView.width / density.toDouble()
+        } else {
+            0.0
+        }
+        val viewportHeight = if (currentWebView.height > 0 && density > 0) {
+            currentWebView.height / density.toDouble()
+        } else {
+            0.0
+        }
+        if (viewportWidth > 0 && viewportHeight > 0 &&
+            readerLookupPopupTouchBlocksReaderGesture(
+                popups = popups.mapIndexed { index, popup ->
+                    ReaderLookupPopupFramePayload.fromPopup(
+                        popup = popup,
+                        popupIndex = index,
+                        viewport = ReaderLookupPopupViewport(width = viewportWidth, height = viewportHeight),
+                        includeInitialEntryJson = false,
+                    )
+                },
+                x = x,
+                y = y,
+            )
+        ) {
+            return
+        }
     }
     currentWebView.evaluateJavascript(
         ReaderSelectionCommand.SelectText(
