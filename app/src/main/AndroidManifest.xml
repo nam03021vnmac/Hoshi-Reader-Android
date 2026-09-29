@@ -85,6 +85,7 @@
 
                 <data android:mimeType="application/epub+zip" />
                 <data android:mimeType="application/epub" />
+                <data android:mimeType="application/pdf" />
                 <data android:scheme="content" />
                 <data android:scheme="file" />
             </intent-filter>

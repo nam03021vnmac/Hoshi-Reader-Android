@@ -128,8 +128,8 @@ internal class BookshelfViewModel : ViewModel {
         }
     }
 
-    fun importBook(uri: Uri, displayName: String? = null) {
-        importBook(uri.toString(), displayName) {
+    fun importBook(uri: Uri, displayName: String? = null, openAfterImport: Boolean = false) {
+        importBook(uri.toString(), displayName, openAfterImport) {
             repository.importBook(uri)
         }
     }
@@ -149,6 +149,7 @@ internal class BookshelfViewModel : ViewModel {
     internal fun importBook(
         importKey: String,
         displayName: String? = null,
+        openAfterImport: Boolean = false,
         importOperation: suspend () -> String,
     ) {
         if (!importGate.tryStart(importKey)) {
@@ -161,10 +162,13 @@ internal class BookshelfViewModel : ViewModel {
             blockingProgressMessage = displayName
                 ?.takeIf { it.isNotBlank() }
                 ?.let { UiText.Resource(R.string.bookshelf_importing_named_format, it) }
-                ?: UiText.Resource(R.string.bookshelf_importing_epub),
+                ?: UiText.Resource(R.string.bookshelf_importing_book),
             block = {
-                importOperation()
+                val bookId = importOperation()
                 reloadBookEntriesSync()
+                if (openAfterImport) {
+                    _uiState.update { it.copy(openReaderBookId = bookId) }
+                }
             },
         )
     }
@@ -175,7 +179,7 @@ internal class BookshelfViewModel : ViewModel {
         }
         if (imports.size == 1) {
             val import = imports.single()
-            importBook(import.importKey, import.displayName, import.importOperation)
+            importBook(import.importKey, import.displayName, importOperation = import.importOperation)
             return
         }
 
@@ -216,14 +220,14 @@ internal class BookshelfViewModel : ViewModel {
                 val imports = importsProvider()
                 if (imports.isEmpty()) {
                     _uiState.update {
-                        it.copy(errorMessage = UiText.Resource(R.string.bookshelf_no_epub_files_found))
+                        it.copy(errorMessage = UiText.Resource(R.string.bookshelf_no_book_files_found))
                     }
                     return@launch
                 }
                 if (imports.size == 1) {
                     _uiState.update { it.copy(isLoading = false, blockingProgressMessage = null) }
                     val import = imports.single()
-                    importBook(import.importKey, import.displayName, import.importOperation)
+                    importBook(import.importKey, import.displayName, importOperation = import.importOperation)
                     return@launch
                 }
                 val importKey = imports.joinToString(separator = "\n") { it.importKey }
@@ -307,10 +311,13 @@ internal class BookshelfViewModel : ViewModel {
     fun exportBook(entry: BookEntry, uri: Uri) {
         runLoading(
             errorPrefix = UiText.Resource(R.string.bookshelf_export_failed),
-            blockingProgressMessage = UiText.Resource(R.string.bookshelf_exporting_epub),
+            preferErrorPrefix = true,
+            blockingProgressMessage = UiText.Resource(
+                if (entry.metadata.isPdf) R.string.bookshelf_exporting_pdf else R.string.bookshelf_exporting_epub,
+            ),
             block = {
                 repository.exportBook(entry, uri)
-                _uiState.update { it.copy(statusMessage = UiText.Resource(R.string.bookshelf_exported_epub_format, entry.displayTitle)) }
+                _uiState.update { it.copy(statusMessage = UiText.Resource(R.string.bookshelf_exported_book_format, entry.displayTitle)) }
             },
         )
     }

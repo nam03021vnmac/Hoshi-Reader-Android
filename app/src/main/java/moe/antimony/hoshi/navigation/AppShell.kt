@@ -99,8 +99,13 @@ fun AppShell(
     val settingsBackStack = rememberNavBackStack(AppRoute.SettingsRoute)
     val bookRepository = appContainer.bookRepository
     val epubBookParser = appContainer.epubBookParser
-    val readerRouteStateHolder = remember(bookRepository, epubBookParser) {
-        ReaderRouteStateHolder(bookRepository, DefaultReaderRouteEpubParser(epubBookParser))
+    val pdfBookParser = appContainer.pdfBookParser
+    val readerRouteStateHolder = remember(bookRepository, epubBookParser, pdfBookParser) {
+        ReaderRouteStateHolder(
+            repository = bookRepository,
+            parser = DefaultReaderRouteEpubParser(epubBookParser),
+            pdfParser = DefaultReaderRoutePdfParser(pdfBookParser),
+        )
     }
     val readerFontManager = appContainer.readerFontManager
     val sasayakiSettingsRepository = appContainer.sasayakiSettingsRepository

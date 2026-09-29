@@ -67,7 +67,10 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
 - EPUB import enters through Android Storage Access Framework and copies content
   into app-specific storage.
 - Current book folders store the packed EPUB as `<folder>/<folder>.epub` and
-  persist the filename in `BookMetadata.epub`. Sidecar JSON and cached covers
+  persist the filename in `BookMetadata.epub`. PDF books instead store the
+  packed file as `<folder>/<folder>.pdf` with the filename in `BookMetadata.pdf`
+  (`BookMetadata.isPdf`); their cover is rendered from the PDF first page into
+  `cover.jpg`. Sidecar JSON and cached covers
   remain beside the EPUB; parser and reader paths extract packed EPUBs only into
   controlled app cache/temp directories when they need the EPUB tree.
 - Android keeps the iOS-sanitized title as the physical book folder when its
@@ -280,6 +283,13 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   Paginated page height and page steps use the visible WebView viewport height;
   vertical padding and column gaps contain only configured user spacing, with
   no extra font-size overlap strip.
+- PDF books read through a separate Android-only WebView reader backed by the
+  vendored offline pdf.js runtime under `app/src/main/assets/hoshi-web/pdfjs`.
+  It renders a lazy page window with fit-width/button/pinch zoom, persists the
+  page index through the shared bookmark sidecar, and reuses the shared lookup
+  popup stack, highlight sidecars (page index as `character`), and reading
+  statistics. PDF has no TOC, book search, or Sasayaki matching; its
+  `bookinfo.json` shims `characterCount` as the page count.
 - Reader `bookinfo.json` sidecars persist whole-book/spine character counts plus
   optional iOS-compatible TOC fragment offsets and a first-appearance raster
   image inventory. A reader-facts schema version invalidates stale derived

@@ -615,7 +615,7 @@ class BookshelfViewModelTest {
             error("bad epub")
         }
 
-        assertEquals("Failed to import EPUB.", viewModel.uiState.value.errorMessage.testString())
+        assertEquals("Failed to import book.", viewModel.uiState.value.errorMessage.testString())
         assertFalse(viewModel.uiState.value.isLoading)
         assertNull(viewModel.uiState.value.blockingProgressMessage.testString())
 
@@ -755,7 +755,7 @@ class BookshelfViewModelTest {
             emptyList()
         }
 
-        assertEquals("No EPUB files found.", viewModel.uiState.value.errorMessage.testString())
+        assertEquals("No EPUB or PDF files found.", viewModel.uiState.value.errorMessage.testString())
         assertEquals(emptyList<BookSortOption>(), repository.loadRequests)
         assertFalse(viewModel.uiState.value.isLoading)
         assertNull(viewModel.uiState.value.blockingProgressMessage.testString())
@@ -1246,7 +1246,7 @@ class BookshelfViewModelTest {
             error("bad epub")
         }
 
-        assertEquals("Failed to import EPUB.", viewModel.uiState.value.errorMessage.testString())
+        assertEquals("Failed to import book.", viewModel.uiState.value.errorMessage.testString())
 
         viewModel.consumeErrorMessage()
 
@@ -1265,6 +1265,76 @@ class BookshelfViewModelTest {
             mapOf("__reading__" to false, "shelf:Manga" to true),
             viewModel.uiState.value.shelfExpansionState,
         )
+    }
+
+    @Test
+    fun pdfImportShowsFileNameThenRefreshesShelfWithoutOpeningReader() {
+        val gate = CompletableDeferred<Unit>()
+        val entry = bookEntry("pdf-book").let { it.copy(metadata = it.metadata.copy(pdf = "pdf-book.pdf")) }
+        val repository = FakeBookshelfRepository(entries = listOf(entry))
+        val viewModel = BookshelfViewModel(repository, testScope())
+
+        viewModel.importBook("content://books/pdf-book.pdf", "pdf-book.pdf") {
+            gate.await()
+            entry.metadata.id
+        }
+
+        assertEquals("Importing pdf-book.pdf...", viewModel.uiState.value.blockingProgressMessage.testString())
+        gate.complete(Unit)
+        assertEquals(listOf(entry), viewModel.uiState.value.bookEntries)
+        assertNull(viewModel.uiState.value.openReaderBookId)
+        assertNull(viewModel.uiState.value.blockingProgressMessage)
+    }
+
+    @Test
+    fun unnamedPdfImportUsesFormatNeutralProgressAndLocalizedFailure() {
+        val gate = CompletableDeferred<Unit>()
+        val viewModel = BookshelfViewModel(FakeBookshelfRepository(), testScope())
+
+        viewModel.importBook("content://books/book.pdf") {
+            gate.await()
+            error("PDF parser implementation detail")
+        }
+
+        assertEquals(R.string.bookshelf_importing_book, (viewModel.uiState.value.blockingProgressMessage as UiText.Resource).id)
+        gate.complete(Unit)
+        assertEquals("Failed to import book.", viewModel.uiState.value.errorMessage.testString())
+        assertFalse(viewModel.uiState.value.isLoading)
+    }
+
+    @Test
+    fun externalPdfImportOpensReaderOnceOnlyAfterImportSucceeds() {
+        val gate = CompletableDeferred<Unit>()
+        val viewModel = BookshelfViewModel(FakeBookshelfRepository(), testScope())
+        var imports = 0
+
+        viewModel.importBook("content://books/book.pdf", openAfterImport = true) {
+            imports++
+            gate.await()
+            "pdf-id"
+        }
+        viewModel.importBook("content://books/book.pdf", openAfterImport = true) {
+            error("Duplicate request must not start")
+        }
+
+        assertNull(viewModel.uiState.value.openReaderBookId)
+        gate.complete(Unit)
+        assertEquals(1, imports)
+        assertEquals("pdf-id", viewModel.uiState.value.openReaderBookId)
+        viewModel.consumeOpenReaderEvent()
+        assertNull(viewModel.uiState.value.openReaderBookId)
+    }
+
+    @Test
+    fun failedExternalPdfImportDoesNotNavigate() {
+        val viewModel = BookshelfViewModel(FakeBookshelfRepository(), testScope())
+
+        viewModel.importBook("content://books/book.pdf", openAfterImport = true) {
+            error("Encrypted PDF")
+        }
+
+        assertNull(viewModel.uiState.value.openReaderBookId)
+        assertEquals("Failed to import book.", viewModel.uiState.value.errorMessage.testString())
     }
 
     private fun testScope(): CoroutineScope = CoroutineScope(Dispatchers.Unconfined)
@@ -1508,13 +1578,13 @@ private fun UiText?.testString(): String? =
             R.string.bookshelf_importing_named_format -> "Importing ${args[0]}..."
             R.string.bookshelf_importing_progress_format -> "Importing ${args[0]} / ${args[1]}..."
             R.string.bookshelf_legacy_migration_progress_format -> "Preparing older books ${args[0]} / ${args[1]}..."
-            R.string.bookshelf_import_failed -> "Failed to import EPUB."
+            R.string.bookshelf_import_failed -> "Failed to import book."
             R.string.bookshelf_import_failed_list_format -> "Failed to import:\n${args[0]}"
             R.string.bookshelf_scanning_folder -> "Scanning folder..."
-            R.string.bookshelf_no_epub_files_found -> "No EPUB files found."
+            R.string.bookshelf_no_book_files_found -> "No EPUB or PDF files found."
             R.string.bookshelf_syncing -> "Syncing..."
             R.string.bookshelf_already_synced_format -> "${args[0]} is already synced"
-            R.string.bookshelf_exported_epub_format -> "Exported ${args[0]}."
+            R.string.bookshelf_exported_book_format -> "Exported ${args[0]}."
             R.string.bookshelf_remote_books_load_failed -> "Failed to fetch books from Google Drive."
             R.string.bookshelf_remote_book_import_failed -> "Failed to import book from Google Drive."
             R.string.bookshelf_remote_book_delete_failed -> "Failed to delete book from Google Drive."

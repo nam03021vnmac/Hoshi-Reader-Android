@@ -45,6 +45,7 @@ class BookMetadataStorageTest {
         assertEquals("屍人荘の殺人", saved.getValue("title").jsonPrimitive.content)
         assertEquals("今村昌弘", saved.getValue("author").jsonPrimitive.content)
         assertEquals("book-a.epub", saved.getValue("epub").jsonPrimitive.content)
+        assertFalse(saved.containsKey("pdf"))
         assertEquals("Custom Shelf Title", saved.getValue("renamedTitle").jsonPrimitive.content)
         assertEquals("Books/book-a/cover.jpg", saved.getValue("cover").jsonPrimitive.content)
         assertEquals("book-a", saved.getValue("folder").jsonPrimitive.content)
@@ -71,6 +72,8 @@ class BookMetadataStorageTest {
 
         assertEquals("Original Title", metadata.title)
         assertEquals(null, metadata.epub)
+        assertEquals(null, metadata.pdf)
+        assertFalse(metadata.isPdf)
         assertEquals(null, metadata.author)
         assertEquals(null, metadata.renamedTitle)
         assertEquals("Original Title", metadata.displayTitle)

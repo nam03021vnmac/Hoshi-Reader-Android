@@ -5,12 +5,119 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.IOException
 import java.nio.file.Files
 import java.util.zip.ZipFile
+import java.util.UUID
 
 class BookRepositoryDataSourceTest {
+    @Test
+    fun pdfMetadataDiscoveryAndExportPreservePackedBytesAndSidecars() = runBlocking {
+        val repository = BookRepository(Files.createTempDirectory("hoshi-pdf-storage").toFile())
+        val root = repository.createBookDirectory("pdf-book")
+        val bytes = "%PDF-1.7\npacked bytes\n%%EOF".toByteArray()
+        root.resolve("document.pdf").writeBytes(bytes)
+        val metadata = BookMetadata(
+            id = UUID.randomUUID().toString(), title = "PDF Book", cover = null,
+            folder = root.name, lastAccess = 42.0, pdf = "document.pdf", renamedTitle = "Renamed PDF",
+        )
+        val bookmark = Bookmark(chapterIndex = 2, progress = 0.5, characterCount = 2)
+        repository.saveMetadata(root, metadata)
+        repository.saveBookmark(root, bookmark)
+
+        val entry = repository.loadBookEntries().single()
+        val output = ByteArrayOutputStream()
+        repository.exportPdf(entry, output)
+
+        assertEquals(metadata, entry.metadata)
+        assertTrue(entry.metadata.isPdf)
+        assertEquals("Renamed PDF", entry.displayTitle)
+        assertEquals(entry, repository.loadBookEntry(metadata.id))
+        assertEquals(root.resolve("document.pdf").canonicalFile, repository.pdfFileForEntry(root))
+        assertNull(repository.epubFile(entry))
+        assertEquals(bookmark, repository.loadBookmark(root))
+        assertArrayEquals(bytes, output.toByteArray())
+    }
+
+    @Test
+    fun pdfFileResolutionSupportsDefaultFilenameAndRejectsTraversal() = runBlocking {
+        val filesDir = Files.createTempDirectory("hoshi-pdf-path").toFile()
+        val dataSource = BookFileDataSource(filesDir)
+        val root = dataSource.createBookDirectory("book")
+        val packed = root.resolve("book.pdf").apply { writeText("PDF") }
+        root.parentFile.resolve("outside.pdf").writeText("private")
+        val metadata = BookMetadata("id", "Book", null, root.name, 0.0, pdf = "../outside.pdf")
+
+        assertEquals(packed.canonicalFile, dataSource.pdfFile(root, null))
+        assertNull(dataSource.pdfFile(root, metadata))
+        assertNull(dataSource.pdfFile(root, metadata.copy(pdf = "missing.pdf")))
+    }
+
+    @Test
+    fun interruptedPdfImportLeavesNeitherBookNorTemporaryPayload() = runBlocking {
+        val filesDir = Files.createTempDirectory("hoshi-pdf-interrupted").toFile()
+        val files = BookFileDataSource(filesDir)
+        val imports = BookImportDataSource(filesDir, files)
+        val input = object : InputStream() {
+            override fun read(): Int = throw IOException("Provider disconnected")
+        }
+
+        val result = runCatching { imports.importBook("Book.PDF", input) }
+
+        assertTrue(result.exceptionOrNull() is IOException)
+        assertTrue(files.loadAllBooks().isEmpty())
+        assertTrue(filesDir.resolve("ImportTemp").listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun unsupportedBookExtensionIsRejectedBeforeReadingInput() = runBlocking {
+        val filesDir = Files.createTempDirectory("hoshi-book-extension").toFile()
+        val imports = BookImportDataSource(filesDir, BookFileDataSource(filesDir))
+        var read = false
+        val input = object : InputStream() {
+            override fun read(): Int {
+                read = true
+                return -1
+            }
+        }
+
+        val result = runCatching { imports.importBook("book.zip", input) }
+
+        assertTrue(result.exceptionOrNull() is moe.antimony.hoshi.importing.UnsupportedImportFileTypeException)
+        assertFalse(read)
+    }
+
+    @Test
+    fun epubImportCannotReplaceSameTitlePdfWithMetadataSelectedFilename() = runBlocking {
+        val filesDir = Files.createTempDirectory("hoshi-book-format-collision").toFile()
+        val repository = BookRepository(filesDir)
+        val root = repository.createBookDirectory("Book")
+        val metadata = BookMetadata(
+            UUID.randomUUID().toString(), "Book", null, root.name, 0.0, pdf = "original.pdf",
+        )
+        repository.saveMetadata(root, metadata)
+        root.resolve("original.pdf").writeText("existing PDF")
+        val source = filesDir.resolve("source.epub")
+        writeMinimalEpubArchive(source, title = "Book")
+        val imports = BookImportDataSource(filesDir, BookFileDataSource(filesDir))
+
+        val result = runCatching {
+            source.inputStream().use { imports.importBook("source.epub", it) }
+        }
+
+        assertTrue(result.isFailure)
+        assertEquals(metadata, repository.loadMetadata(root))
+        assertEquals("existing PDF", root.resolve("original.pdf").readText())
+        assertFalse(root.resolve("Book.epub").exists())
+        assertTrue(filesDir.resolve("ImportTemp").listFiles().orEmpty().isEmpty())
+    }
+
     @Test
     fun importDataSourceImportsLongTitleWithoutLeavingTemporaryFiles() = runBlocking {
         val filesDir = Files.createTempDirectory("hoshi-long-import").toFile()

@@ -1,12 +1,14 @@
 package moe.antimony.hoshi.navigation
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookInfo
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.EpubBook
 import moe.antimony.hoshi.epub.EpubChapter
+import moe.antimony.hoshi.epub.PdfBook
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.ReaderRouteBookRepository
 import org.junit.Assert.assertEquals
@@ -16,6 +18,96 @@ import java.io.File
 import java.nio.file.Files
 
 class ReaderRouteStateHolderTest {
+    @Test
+    fun pdfLoadUsesPdfParserAndRestoresBookmarkAfterImportHook() = runBlocking {
+        val root = Files.createTempDirectory("hoshi-pdf-route").toFile()
+        val pdfFile = root.resolve("book.pdf")
+        val metadata = BookMetadata(
+            "pdf-book", "Original", null, root.name, 0.0,
+            pdf = pdfFile.name, renamedTitle = "Renamed PDF",
+        )
+        val importedBookmark = Bookmark(chapterIndex = 2, progress = 0.25, characterCount = 2)
+        val repository = FakeReaderRouteBookRepository(
+            entry = BookEntry(root, metadata), pdfFile = pdfFile, now = 42.0,
+        )
+        var pdfParseCount = 0
+        val holder = ReaderRouteStateHolder(
+            repository = repository,
+            parser = object : ReaderRouteEpubParser {
+                override fun parse(root: File, cachedBookInfo: BookInfo?): EpubBook = error("EPUB parser must not run")
+            },
+            pdfParser = object : ReaderRoutePdfParser {
+                override fun parse(pdfFile: File, fallbackTitle: String?): PdfBook {
+                    pdfParseCount++
+                    assertEquals("Original", fallbackTitle)
+                    return PdfBook("Original", pageCount = 4)
+                }
+            },
+        )
+
+        val state = holder.load("pdf-book") { entry ->
+            assertEquals(metadata.copy(lastAccess = 42.0), entry.metadata)
+            assertEquals(1, pdfParseCount)
+            assertEquals(PdfBook("Original", 4).bookInfo, repository.savedBookInfo)
+            repository.bookmark = importedBookmark
+        } as ReaderRouteLoadState.ReadyPdf
+
+        assertEquals(pdfFile, state.pdfFile)
+        assertEquals("Renamed PDF", state.book.title)
+        assertEquals(4, state.book.pageCount)
+        assertEquals(importedBookmark, state.bookmark)
+        assertEquals(metadata.copy(lastAccess = 42.0), repository.savedMetadata)
+    }
+
+    @Test
+    fun missingPdfDoesNotParseOrPublishMetadataOrRunImportHook() = runBlocking {
+        val root = File("missing-pdf")
+        val repository = FakeReaderRouteBookRepository(
+            entry = BookEntry(root, BookMetadata("id", "Book", null, root.name, 0.0, pdf = "book.pdf")),
+        )
+        val holder = ReaderRouteStateHolder(repository)
+        var hookCalled = false
+
+        val state = holder.load("id") { hookCalled = true }
+
+        assertEquals(ReaderRouteLoadState.Error, state)
+        assertEquals(null, repository.savedMetadata)
+        assertEquals(null, repository.savedBookInfo)
+        assertEquals(false, hookCalled)
+    }
+
+    @Test
+    fun epubImportHookReceivesParsedMetadataAndCachedFactsBeforeBookmarkLoad() = runBlocking {
+        val root = File("book")
+        val parsed = readerBook(title = "Parsed title")
+        val repository = FakeReaderRouteBookRepository(
+            entry = BookEntry(root, BookMetadata("id", "Old title", null, root.name, 0.0)),
+        )
+        val holder = ReaderRouteStateHolder(repository, FakeReaderRouteEpubParser(parsed))
+        val bookmark = Bookmark(chapterIndex = 0, progress = 0.5, characterCount = 5)
+
+        val state = holder.load("id") { entry ->
+            assertEquals("Parsed title", entry.metadata.title)
+            assertEquals(parsed.bookInfo, repository.savedBookInfo)
+            repository.bookmark = bookmark
+        } as ReaderRouteLoadState.Ready
+
+        assertEquals(bookmark, state.bookmark)
+    }
+
+    @Test
+    fun cancelledLoadPropagatesInsteadOfShowingAnErrorPage() = runBlocking {
+        val root = File("book")
+        val holder = ReaderRouteStateHolder(
+            FakeReaderRouteBookRepository(BookEntry(root, BookMetadata("id", "Book", null, root.name, 0.0))),
+            FakeReaderRouteEpubParser(readerBook()),
+        )
+
+        val result = runCatching { holder.load("id") { throw CancellationException("Closed") } }
+
+        assertTrue(result.exceptionOrNull() is CancellationException)
+    }
+
     @Test
     fun loadReadyParsesBookUpdatesSidecarsAndRestoresBookmark() = runBlocking {
         val root = Files.createTempDirectory("hoshi-reader-route-book").toFile()
@@ -174,9 +266,10 @@ class ReaderRouteStateHolderTest {
 
     private class FakeReaderRouteBookRepository(
         private val entry: BookEntry?,
-        private val bookmark: Bookmark? = null,
+        var bookmark: Bookmark? = null,
         private val bookInfo: BookInfo? = null,
         private val now: Double = 1.0,
+        private val pdfFile: File? = null,
     ) : ReaderRouteBookRepository {
         var savedMetadata: BookMetadata? = null
             private set
@@ -188,6 +281,8 @@ class ReaderRouteStateHolderTest {
             private set
 
         override suspend fun loadBookEntry(bookId: String): BookEntry? = entry
+
+        override suspend fun pdfFileForEntry(bookRoot: File): File? = pdfFile
 
         override suspend fun metadataCoverPath(bookRoot: File, coverHref: String?): String? =
             coverHref?.let { "Books/${bookRoot.name}/${File(it).name}" }

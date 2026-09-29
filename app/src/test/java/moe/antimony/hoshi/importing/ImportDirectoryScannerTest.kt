@@ -5,6 +5,26 @@ import org.junit.Test
 
 class ImportDirectoryScannerTest {
     @Test
+    fun bookScanFindsBothFormatsInNestedFoldersAndSkipsVirtualPdfs() {
+        val tree = FakeImportDirectoryTree(
+            "root" to listOf(
+                file("epub", "Book.epub"),
+                directory("nested", "Nested"),
+                file("virtual", "Virtual.pdf", isVirtual = true),
+            ),
+            "nested" to listOf(file("pdf", "Book.PDF"), file("zip", "Book.pdf.zip")),
+        )
+
+        assertEquals(
+            listOf(
+                ImportDirectoryFile(key = "epub", displayName = "Book.epub"),
+                ImportDirectoryFile(key = "pdf", displayName = "Nested/Book.PDF"),
+            ),
+            ImportDirectoryScanner(tree).scan("root", ImportFileType.Book),
+        )
+    }
+
+    @Test
     fun recursivelyFindsMatchingFilesWithRelativeDisplayNames() {
         val tree = FakeImportDirectoryTree(
             "root" to listOf(

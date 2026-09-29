@@ -49,6 +49,8 @@ internal fun ReaderStatisticsSheet(
     currentChapterEndCharacter: Int,
     totalCharacters: Int,
     progressDisplay: ReaderProgressDisplay = ReaderProgressDisplay.characters(),
+    showProgressMetrics: Boolean = true,
+    showTimeToFinish: Boolean = true,
     onToggleTracking: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -74,24 +76,29 @@ internal fun ReaderStatisticsSheet(
                     title = stringResource(R.string.reader_statistics_session),
                     statistic = state.session,
                     progressDisplay = progressDisplay,
+                    showProgressMetrics = showProgressMetrics,
                     isTracking = state.isTracking,
                     onToggleTracking = onToggleTracking,
-                    extraRows = listOf(
-                        stringResource(R.string.reader_statistics_time_to_finish_book) to formatDurationSeconds(
-                            secondsRemaining(
-                                remainingCharacters = totalCharacters - currentCharacter,
-                                speed = state.session.lastReadingSpeed,
-                                progressDisplay = progressDisplay,
+                    extraRows = if (showTimeToFinish) {
+                        listOf(
+                            stringResource(R.string.reader_statistics_time_to_finish_book) to formatDurationSeconds(
+                                secondsRemaining(
+                                    remainingCharacters = totalCharacters - currentCharacter,
+                                    speed = state.session.lastReadingSpeed,
+                                    progressDisplay = progressDisplay,
+                                ),
                             ),
-                        ),
-                        stringResource(R.string.reader_statistics_time_to_finish_chapter) to formatDurationSeconds(
-                            secondsRemaining(
-                                remainingCharacters = currentChapterEndCharacter - currentCharacter,
-                                speed = state.session.lastReadingSpeed,
-                                progressDisplay = progressDisplay,
+                            stringResource(R.string.reader_statistics_time_to_finish_chapter) to formatDurationSeconds(
+                                secondsRemaining(
+                                    remainingCharacters = currentChapterEndCharacter - currentCharacter,
+                                    speed = state.session.lastReadingSpeed,
+                                    progressDisplay = progressDisplay,
+                                ),
                             ),
-                        ),
-                    ),
+                        )
+                    } else {
+                        emptyList()
+                    },
                 )
             }
             item {
@@ -99,6 +106,7 @@ internal fun ReaderStatisticsSheet(
                     title = stringResource(R.string.reader_statistics_today),
                     statistic = state.today,
                     progressDisplay = progressDisplay,
+                    showProgressMetrics = showProgressMetrics,
                 )
             }
             item {
@@ -106,6 +114,7 @@ internal fun ReaderStatisticsSheet(
                     title = stringResource(R.string.reader_statistics_all_time),
                     statistic = state.allTime,
                     progressDisplay = progressDisplay,
+                    showProgressMetrics = showProgressMetrics,
                 )
             }
         }
@@ -117,6 +126,7 @@ private fun StatisticsSection(
     title: String,
     statistic: ReadingStatistics,
     progressDisplay: ReaderProgressDisplay,
+    showProgressMetrics: Boolean,
     isTracking: Boolean? = null,
     onToggleTracking: () -> Unit = {},
     extraRows: List<Pair<String, String>> = emptyList(),
@@ -157,19 +167,21 @@ private fun StatisticsSection(
             tonalElevation = 0.dp,
         ) {
             Column {
-                StatisticRow(
-                    stringResource(
-                        if (progressDisplay.usesWords) {
-                            R.string.reader_statistics_words_read
-                        } else {
-                            R.string.reader_statistics_characters_read
-                        },
-                    ),
-                    progressDisplay.countText(statistic.charactersRead),
-                )
-                StatisticsDivider()
-                StatisticRow(stringResource(R.string.reader_statistics_reading_speed), progressDisplay.speedText(statistic.lastReadingSpeed))
-                StatisticsDivider()
+                if (showProgressMetrics) {
+                    StatisticRow(
+                        stringResource(
+                            if (progressDisplay.usesWords) {
+                                R.string.reader_statistics_words_read
+                            } else {
+                                R.string.reader_statistics_characters_read
+                            },
+                        ),
+                        progressDisplay.countText(statistic.charactersRead),
+                    )
+                    StatisticsDivider()
+                    StatisticRow(stringResource(R.string.reader_statistics_reading_speed), progressDisplay.speedText(statistic.lastReadingSpeed))
+                    StatisticsDivider()
+                }
                 StatisticRow(stringResource(R.string.reader_statistics_reading_time), formatDurationSeconds(statistic.readingTime))
                 extraRows.forEach { (label, value) ->
                     StatisticsDivider()

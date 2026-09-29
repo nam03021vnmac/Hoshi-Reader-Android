@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.navigation
 
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.epub.Bookmark
@@ -8,6 +9,8 @@ import moe.antimony.hoshi.epub.BookInfo
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.EpubBook
 import moe.antimony.hoshi.epub.EpubBookParser
+import moe.antimony.hoshi.epub.PdfBook
+import moe.antimony.hoshi.epub.PdfBookParser
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.ReaderRouteBookRepository
 import java.io.File
@@ -15,6 +18,7 @@ import java.io.File
 internal class ReaderRouteStateHolder(
     private val repository: ReaderRouteBookRepository,
     private val parser: ReaderRouteEpubParser = DefaultReaderRouteEpubParser(),
+    private val pdfParser: ReaderRoutePdfParser = DefaultReaderRoutePdfParser(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     suspend fun load(
@@ -24,35 +28,60 @@ internal class ReaderRouteStateHolder(
         runCatching {
             val entry = repository.loadBookEntry(bookId)
                 ?: error("Book not found.")
-            val cachedBookInfo = repository.loadReaderBookInfo(entry.root)
-            val parsedBook = parser.parse(entry.root, cachedBookInfo)
+            val displayTitle = entry.displayTitle
             val metadata = entry.metadata.copy(
-                title = parsedBook.title,
-                cover = repository.metadataCoverPath(entry.root, parsedBook.coverHref) ?: entry.metadata.cover,
+                title = entry.metadata.title ?: displayTitle,
                 folder = entry.root.name,
                 lastAccess = repository.currentAppleReferenceDateSeconds(),
-                bookLanguage = entry.metadata.bookLanguage ?: parsedBook.language,
             )
-            repository.saveMetadata(
-                entry.root,
-                metadata,
-            )
-            val displayEntry = entry.copy(metadata = metadata)
-            val displayBook = parsedBook.copy(title = displayEntry.displayTitle)
-            if (cachedBookInfo != displayBook.bookInfo) {
-                repository.saveBookInfo(entry.root, displayBook.bookInfo)
+            if (metadata.isPdf) {
+                val pdfFile = repository.pdfFileForEntry(entry.root) ?: error("PDF file is missing.")
+                val parsedBook = pdfParser.parse(pdfFile, metadata.title)
+                repository.saveMetadata(entry.root, metadata)
+                val displayEntry = entry.copy(metadata = metadata)
+                val displayBook = parsedBook.copy(title = displayEntry.displayTitle)
+                val cachedBookInfo = repository.loadReaderBookInfo(entry.root)
+                if (cachedBookInfo != displayBook.bookInfo) {
+                    repository.saveBookInfo(entry.root, displayBook.bookInfo)
+                }
+                beforeBookmarkLoad(displayEntry)
+                val bookmark = repository.loadBookmark(entry.root)
+                ReaderRouteLoadState.ReadyPdf(
+                    entry = displayEntry,
+                    bookRoot = entry.root,
+                    book = displayBook,
+                    pdfFile = pdfFile,
+                    bookCoverFile = resolveMetadataCoverFile(entry.root, metadata.cover),
+                    bookmark = bookmark,
+                )
+            } else {
+                val cachedBookInfo = repository.loadReaderBookInfo(entry.root)
+                val parsedBook = parser.parse(entry.root, cachedBookInfo)
+                val updatedMetadata = metadata.copy(
+                    title = parsedBook.title,
+                    cover = repository.metadataCoverPath(entry.root, parsedBook.coverHref) ?: entry.metadata.cover,
+                    bookLanguage = entry.metadata.bookLanguage ?: parsedBook.language,
+                )
+                repository.saveMetadata(entry.root, updatedMetadata)
+                val updatedEntry = entry.copy(metadata = updatedMetadata)
+                val displayBook = parsedBook.copy(title = updatedEntry.displayTitle)
+                if (cachedBookInfo != displayBook.bookInfo) {
+                    repository.saveBookInfo(entry.root, displayBook.bookInfo)
+                }
+                beforeBookmarkLoad(updatedEntry)
+                val bookmark = repository.loadBookmark(entry.root)
+                ReaderRouteLoadState.Ready(
+                    entry = updatedEntry,
+                    bookRoot = entry.root,
+                    book = displayBook,
+                    bookCoverFile = resolveMetadataCoverFile(entry.root, updatedMetadata.cover),
+                    bookmark = bookmark,
+                )
             }
-            val bookCoverFile = resolveMetadataCoverFile(entry.root, metadata.cover)
-            beforeBookmarkLoad(displayEntry)
-            val bookmark = repository.loadBookmark(entry.root)
-            ReaderRouteLoadState.Ready(
-                entry = displayEntry,
-                bookRoot = entry.root,
-                book = displayBook,
-                bookCoverFile = bookCoverFile,
-                bookmark = bookmark,
-            )
-        }.getOrElse { ReaderRouteLoadState.Error }
+        }.getOrElse {
+            if (it is CancellationException) throw it
+            ReaderRouteLoadState.Error
+        }
     }
 
     suspend fun saveBookmark(
@@ -76,6 +105,28 @@ internal class ReaderRouteStateHolder(
         }
         onBookmarkSaved()
     }
+
+    suspend fun saveBookmark(
+        state: ReaderRouteLoadState.ReadyPdf,
+        pageIndex: Int,
+        progress: Double,
+        statistics: List<ReadingStatistics>? = null,
+        onBookmarkSaved: () -> Unit,
+    ) {
+        withContext(ioDispatcher) {
+            val bookmark = Bookmark(
+                chapterIndex = pageIndex,
+                progress = progress,
+                characterCount = state.book.characterCountAt(pageIndex, progress),
+                lastModified = repository.currentAppleReferenceDateSeconds(),
+            )
+            repository.saveBookmark(state.bookRoot, bookmark)
+            if (statistics != null) {
+                repository.saveTrackedStatistics(state.bookRoot, statistics)
+            }
+        }
+        onBookmarkSaved()
+    }
 }
 
 internal interface ReaderRouteEpubParser {
@@ -89,6 +140,17 @@ internal class DefaultReaderRouteEpubParser(
         parser.parse(root, cachedBookInfo = cachedBookInfo)
 }
 
+internal interface ReaderRoutePdfParser {
+    fun parse(pdfFile: File, fallbackTitle: String? = null): PdfBook
+}
+
+internal class DefaultReaderRoutePdfParser(
+    private val parser: PdfBookParser = PdfBookParser(),
+) : ReaderRoutePdfParser {
+    override fun parse(pdfFile: File, fallbackTitle: String?): PdfBook =
+        parser.parse(pdfFile, fallbackTitle = fallbackTitle)
+}
+
 internal sealed interface ReaderRouteLoadState {
     data object Loading : ReaderRouteLoadState
 
@@ -96,6 +158,15 @@ internal sealed interface ReaderRouteLoadState {
         val entry: moe.antimony.hoshi.epub.BookEntry,
         val bookRoot: File,
         val book: EpubBook,
+        val bookCoverFile: File?,
+        val bookmark: Bookmark?,
+    ) : ReaderRouteLoadState
+
+    data class ReadyPdf(
+        val entry: moe.antimony.hoshi.epub.BookEntry,
+        val bookRoot: File,
+        val book: PdfBook,
+        val pdfFile: File,
         val bookCoverFile: File?,
         val bookmark: Bookmark?,
     ) : ReaderRouteLoadState
@@ -109,6 +180,7 @@ internal fun ReaderRouteLoadState.publishProfileActivation(
 ) {
     when (this) {
         is ReaderRouteLoadState.Ready -> activateForBook(entry.metadata)
+        is ReaderRouteLoadState.ReadyPdf -> activateForBook(entry.metadata)
         is ReaderRouteLoadState.Error -> clearLoadedProfile()
         ReaderRouteLoadState.Loading -> Unit
     }

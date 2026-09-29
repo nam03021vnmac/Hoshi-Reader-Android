@@ -9,6 +9,10 @@ class ImportFileTypeTest {
     @Test
     fun regularFileTypesExposePickerMimeTypesWithoutAcceptingEverything() {
         assertEquals(listOf("epub"), ImportFileType.Epub.extensions)
+        assertEquals(listOf("pdf"), ImportFileType.Pdf.extensions)
+        assertEquals(listOf("epub", "pdf"), ImportFileType.Book.extensions)
+        assertTrue(ImportFileType.Book.mimeTypes.contains("application/pdf"))
+        assertEquals(1, ImportFileType.Book.mimeTypes.count { it == "application/octet-stream" })
         assertEquals(listOf("srt"), ImportFileType.SasayakiSubtitle.extensions)
         assertEquals(listOf("mp3", "m4b", "m4a", "opus"), ImportFileType.SasayakiAudiobook.extensions)
         assertTrue(ImportFileType.SasayakiAudiobook.mimeTypes.contains("audio/ogg"))
@@ -19,6 +23,8 @@ class ImportFileTypeTest {
 
         val allPickerTypes = listOf(
             ImportFileType.Epub,
+            ImportFileType.Pdf,
+            ImportFileType.Book,
             ImportFileType.SasayakiSubtitle,
             ImportFileType.SasayakiAudiobook,
             ImportFileType.DictionaryArchive,
@@ -39,6 +45,9 @@ class ImportFileTypeTest {
     @Test
     fun validatesExpectedFileExtensionsCaseInsensitively() {
         assertTrue(ImportFileType.Epub.matchesDisplayName("Book.EPUB"))
+        assertTrue(ImportFileType.Pdf.matchesDisplayName("Book.PDF"))
+        assertTrue(ImportFileType.Book.matchesDisplayName("Book.PDF"))
+        assertTrue(ImportFileType.Book.matchesDisplayName("Book.EPUB"))
         assertTrue(ImportFileType.SasayakiSubtitle.matchesDisplayName("subtitle.srt"))
         assertTrue(ImportFileType.SasayakiAudiobook.matchesDisplayName("audio.MP3"))
         assertTrue(ImportFileType.SasayakiAudiobook.matchesDisplayName("audio.m4b"))
@@ -65,6 +74,8 @@ class ImportFileTypeTest {
         assertFalse(ImportFileType.LocalAudioDatabase.matchesDisplayName("dictionary.zip"))
         assertFalse(ImportFileType.DictionaryArchive.matchesDisplayName("android.db"))
         assertFalse(ImportFileType.Epub.matchesDisplayName("book.zip"))
+        assertFalse(ImportFileType.Book.matchesDisplayName("book.pdf.zip"))
+        assertFalse(ImportFileType.Book.matchesDisplayName("book.txt"))
     }
 
     @Test

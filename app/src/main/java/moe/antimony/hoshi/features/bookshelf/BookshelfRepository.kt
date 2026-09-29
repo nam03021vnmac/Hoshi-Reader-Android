@@ -23,7 +23,10 @@ import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.EpubBook
 import moe.antimony.hoshi.epub.EpubBookParser
 import moe.antimony.hoshi.epub.LegacyBookMigrationProgress
+import moe.antimony.hoshi.epub.PdfBookParser
 import moe.antimony.hoshi.epub.isUuidString
+import moe.antimony.hoshi.importing.ImportFileType
+import moe.antimony.hoshi.importing.importDisplayName
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import moe.antimony.hoshi.features.sync.DriveAuthStatus
 import moe.antimony.hoshi.features.sync.DriveAuthorizer
@@ -102,6 +105,7 @@ internal class AndroidBookshelfRepository @Inject constructor(
     private val driveAuthorizer: DriveAuthorizer,
     private val ttuBookDataConverter: TtuBookDataConverter,
     private val bookParser: EpubBookParser,
+    private val pdfBookParser: PdfBookParser,
     private val bookCoverThumbnailStore: BookCoverThumbnailStore,
     @param:CacheDir private val cacheDir: File,
     @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -153,6 +157,10 @@ internal class AndroidBookshelfRepository @Inject constructor(
     }
 
     override suspend fun importBook(uri: Uri): String = withContext(ioDispatcher) {
+        val displayName = contentResolver.importDisplayName(uri)
+        if (ImportFileType.Pdf.matchesDisplayName(displayName)) {
+            return@withContext importPdfBook(uri, displayName)
+        }
         val root = bookRepository.importBook(contentResolver, uri)
         val parsedBook = bookParser.parse(root)
         saveMetadata(root, parsedBook, bookRepository.loadMetadata(root))
@@ -162,10 +170,49 @@ internal class AndroidBookshelfRepository @Inject constructor(
         readerBookId(root)
     }
 
+    private suspend fun importPdfBook(uri: Uri, displayName: String): String = withContext(ioDispatcher) {
+        val root = bookRepository.importBook(contentResolver, uri)
+        val pdfFile = bookRepository.pdfFile(root) ?: error("Imported PDF file is missing.")
+        val parsedBook = pdfBookParser.parse(pdfFile, fallbackTitle = displayName.substringBeforeLast('.'))
+        val previous = bookRepository.loadMetadata(root)
+        val metadata = BookMetadata(
+            id = previous?.id?.takeIf { it.isUuidString() } ?: UUID.randomUUID().toString(),
+            title = parsedBook.title,
+            cover = previous?.cover,
+            folder = root.name,
+            lastAccess = bookRepository.currentAppleReferenceDateSeconds(),
+            renamedTitle = previous?.renamedTitle,
+            pdf = pdfFile.name,
+            profileId = previous?.profileId,
+            bookLanguage = previous?.bookLanguage,
+            author = previous?.author,
+        )
+        bookRepository.saveMetadata(root, metadata)
+        bookRepository.saveBookInfo(root, parsedBook.bookInfo)
+        bookRepository.restoreArchivedStatistics(root.name)
+        val entry = BookEntry(root, metadata)
+        val coverFile = bookRepository.coverFile(entry)
+        if (coverFile == null || !coverFile.isFile) {
+            val rendered = root.resolve("cover.jpg")
+            if (pdfBookParser.renderCover(pdfFile, rendered)) {
+                bookRepository.saveMetadata(
+                    root,
+                    metadata.copy(cover = "Books/${root.name}/${rendered.name}"),
+                )
+            }
+        }
+        prewarmBookCover(root)
+        readerBookId(root)
+    }
+
     override suspend fun exportBook(entry: BookEntry, uri: Uri): Unit = withContext(ioDispatcher) {
         contentResolver.openOutputStream(uri)?.use { output ->
-            bookRepository.exportEpub(entry, output)
-        } ?: error("Unable to open EPUB export destination.")
+            if (entry.metadata.isPdf) {
+                bookRepository.exportPdf(entry, output)
+            } else {
+                bookRepository.exportEpub(entry, output)
+            }
+        } ?: error("Unable to open book export destination.")
     }
 
     override suspend fun importRemoteBook(

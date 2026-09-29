@@ -212,7 +212,7 @@ fun BookshelfView(
         if (uri == null) return@rememberLauncherForActivityResult
         booksViewModel.importBookFolderItems {
             withContext(Dispatchers.IO) {
-                folderScanner.scan(uri, ImportFileType.Epub).map { file ->
+                folderScanner.scan(uri, ImportFileType.Book).map { file ->
                     BookImportItem(
                         uri = file.key,
                         displayName = file.displayName,
@@ -222,15 +222,24 @@ fun BookshelfView(
         }
     }
 
-    val epubExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/epub+zip")) { uri ->
+    fun exportBook(uri: Uri?) {
         val candidate = exportCandidate
         exportCandidate = null
-        if (uri == null || candidate == null) return@rememberLauncherForActivityResult
+        if (uri == null || candidate == null) return
         booksViewModel.exportBook(candidate, uri)
     }
 
+    val epubExporter = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/epub+zip"),
+        ::exportBook,
+    )
+    val pdfExporter = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf"),
+        ::exportBook,
+    )
+
     fun launchBookImporter() {
-        importer.launch(ImportFileType.Epub.mimeTypes)
+        importer.launch(ImportFileType.Book.mimeTypes)
     }
 
     fun launchBookFolderImporter() {
@@ -256,7 +265,7 @@ fun BookshelfView(
     LaunchedEffect(pendingImportUri) {
         val uri = pendingImportUri ?: return@LaunchedEffect
         onPendingImportConsumed()
-        booksViewModel.importBook(uri)
+        booksViewModel.importBook(uri, openAfterImport = true)
     }
 
     LaunchedEffect(uiState.openReaderBookId) {
@@ -342,7 +351,8 @@ fun BookshelfView(
         onDeleteCandidate = { deleteCandidate = it },
         onExportCandidate = { entry ->
             exportCandidate = entry
-            epubExporter.launch("${entry.displayTitle.sanitizeExportFileName()}.epub")
+            val name = entry.displayTitle.sanitizeExportFileName()
+            if (entry.metadata.isPdf) pdfExporter.launch("$name.pdf") else epubExporter.launch("$name.epub")
         },
         onMarkReadCandidate = { markReadCandidate = it },
         onRenameCandidate = {
@@ -1313,7 +1323,7 @@ private fun BooksTopAppBar(
                     IconButton(onClick = { importMenuExpanded = true }, enabled = enabled) {
                         Icon(
                             imageVector = Icons.Rounded.Add,
-                            contentDescription = stringResource(R.string.bookshelf_import_epub),
+                            contentDescription = stringResource(R.string.bookshelf_import_book),
                         )
                     }
                     DropdownMenu(
@@ -1696,7 +1706,9 @@ private fun BookContextMenu(
             },
         )
         DropdownMenuItem(
-            text = { Text(stringResource(R.string.bookshelf_export_epub)) },
+            text = {
+                Text(stringResource(if (entry.metadata.isPdf) R.string.bookshelf_export_pdf else R.string.bookshelf_export_epub))
+            },
             onClick = {
                 onExportCandidate(entry)
                 onDismiss()
@@ -2319,7 +2331,7 @@ private fun EmptyBooksView(
         Spacer(Modifier.height(24.dp))
         Row(Modifier.fillMaxWidth()) {
             Button(onClick = onImport, enabled = enabled) {
-                Text(stringResource(R.string.bookshelf_import_epub))
+                Text(stringResource(R.string.bookshelf_import_book))
             }
         }
     }

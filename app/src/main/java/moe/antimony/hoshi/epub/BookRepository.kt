@@ -27,6 +27,7 @@ import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.di.FilesDir
 import moe.antimony.hoshi.di.IoDispatcher
 import moe.antimony.hoshi.importing.ImportFileType
+import moe.antimony.hoshi.importing.importDisplayName
 import moe.antimony.hoshi.importing.validateImportFile
 
 @Singleton
@@ -38,6 +39,7 @@ class BookRepository private constructor(
     private val clock: BookClock,
     internal val statisticsStore: BookStatisticsStore,
     private val workRegistry: BookWorkRegistry,
+    pdfBookParser: PdfBookParser,
 ) : ReaderRouteBookRepository, SasayakiSidecarRepository {
     @Inject
     constructor(
@@ -45,6 +47,7 @@ class BookRepository private constructor(
         @IoDispatcher ioDispatcher: CoroutineDispatcher,
         statisticsStore: BookStatisticsStore,
         workRegistry: BookWorkRegistry,
+        pdfBookParser: PdfBookParser,
     ) : this(
         filesDir = filesDir,
         ioDispatcher = ioDispatcher,
@@ -53,16 +56,19 @@ class BookRepository private constructor(
         clock = SystemBookClock,
         statisticsStore = statisticsStore,
         workRegistry = workRegistry,
+        pdfBookParser = pdfBookParser,
     )
 
     constructor(
         filesDir: File,
         ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
         workRegistry: BookWorkRegistry = BookWorkRegistry(),
-    ) : this(filesDir, ioDispatcher, BookStatisticsStore(filesDir, ioDispatcher), workRegistry)
+    ) : this(filesDir, ioDispatcher, BookStatisticsStore(filesDir, ioDispatcher), workRegistry, PdfBookParser())
 
     private val archiveExtractor = EpubArchiveExtractor()
-    private val importDataSource = BookImportDataSource(filesDir, fileDataSource, ioDispatcher = ioDispatcher)
+    private val importDataSource = BookImportDataSource(
+        filesDir, fileDataSource, pdfParser = pdfBookParser, ioDispatcher = ioDispatcher,
+    )
 
     private val legacyPackedMigrationMutex = Mutex()
 
@@ -142,9 +148,22 @@ class BookRepository private constructor(
     suspend fun epubFile(bookRoot: File, metadata: BookMetadata?): File? =
         fileDataSource.epubFile(bookRoot, metadata)
 
+    suspend fun pdfFile(entry: BookEntry): File? = fileDataSource.pdfFile(entry.root, entry.metadata)
+
+    suspend fun pdfFile(bookRoot: File): File? =
+        pdfFile(bookRoot, loadMetadata(bookRoot))
+
+    suspend fun pdfFile(bookRoot: File, metadata: BookMetadata?): File? =
+        fileDataSource.pdfFile(bookRoot, metadata)
+
     suspend fun exportEpub(entry: BookEntry, output: java.io.OutputStream) = withContext(ioDispatcher) {
         val epub = epubFile(entry) ?: error("Book does not have a packed EPUB.")
         epub.inputStream().use { input -> input.copyTo(output) }
+    }
+
+    suspend fun exportPdf(entry: BookEntry, output: java.io.OutputStream) = withContext(ioDispatcher) {
+        val pdf = pdfFile(entry) ?: error("Book does not have a packed PDF.")
+        pdf.inputStream().use { input -> input.copyTo(output) }
     }
 
     override suspend fun metadataCoverPath(bookRoot: File, coverHref: String?): String? =
@@ -224,6 +243,9 @@ class BookRepository private constructor(
 
     override suspend fun loadReaderBookInfo(bookRoot: File): BookInfo? =
         loadBookInfo(bookRoot)
+
+    override suspend fun pdfFileForEntry(bookRoot: File): File? =
+        pdfFile(bookRoot, loadMetadata(bookRoot))
 
     override suspend fun saveBookInfo(bookRoot: File, bookInfo: BookInfo) {
         sidecarDataSource.saveBookInfo(bookRoot, bookInfo)
@@ -399,6 +421,7 @@ interface ReaderRouteBookRepository {
     suspend fun saveTrackedStatistics(bookRoot: File, statistics: List<ReadingStatistics>)
     suspend fun loadReaderBookInfo(bookRoot: File): BookInfo?
     suspend fun saveBookInfo(bookRoot: File, bookInfo: BookInfo)
+    suspend fun pdfFileForEntry(bookRoot: File): File?
     fun currentAppleReferenceDateSeconds(): Double
 }
 
@@ -466,6 +489,17 @@ class BookFileDataSource(
         }
     }
 
+    suspend fun pdfFile(bookRoot: File, metadata: BookMetadata?): File? = withContext(ioDispatcher) {
+        val pdfName = metadata?.pdf?.takeIf { it.isNotBlank() } ?: "${bookRoot.name}.pdf"
+        val root = bookRoot.canonicalFile
+        val pdf = root.resolve(pdfName).canonicalFile
+        if ((pdf.path == root.path || pdf.path.startsWith(root.path + File.separator)) && pdf.isFile) {
+            pdf
+        } else {
+            null
+        }
+    }
+
     suspend fun metadataCoverPath(bookRoot: File, coverHref: String?): String? = withContext(ioDispatcher) {
         val cover = coverHref?.takeIf { it.isNotBlank() } ?: return@withContext null
         val source = resolveCoverFile(bookRoot, cover) ?: return@withContext null
@@ -525,20 +559,29 @@ class BookImportDataSource(
     private val filesDir: File,
     private val fileDataSource: BookFileDataSource,
     private val parser: EpubBookParser = EpubBookParser(),
+    private val pdfParser: PdfBookParser = PdfBookParser(),
     private val archiveExtractor: EpubArchiveExtractor = EpubArchiveExtractor(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     suspend fun importBook(contentResolver: ContentResolver, uri: Uri): File = withContext(ioDispatcher) {
-        val displayName = contentResolver.validateImportFile(uri, ImportFileType.Epub)
+        val displayName = contentResolver.validateImportFile(uri, ImportFileType.Book)
         contentResolver.openInputStream(uri).use { input ->
-            importBook(
-                displayName = displayName,
-                input = requireNotNull(input) { "Unable to open selected EPUB" },
-            )
+            importBook(displayName, requireNotNull(input) { "Unable to open selected file" })
         }
     }
 
-    internal suspend fun importBook(displayName: String, input: InputStream): File = withContext(ioDispatcher) {
+    internal suspend fun importBook(displayName: String, input: InputStream): File {
+        if (!ImportFileType.Book.matchesDisplayName(displayName)) {
+            throw ImportFileType.Book.unsupportedFileError(displayName)
+        }
+        return if (ImportFileType.Pdf.matchesDisplayName(displayName)) {
+            importPdfBook(displayName, input)
+        } else {
+            importEpubBook(displayName, input)
+        }
+    }
+
+    private suspend fun importEpubBook(displayName: String, input: InputStream): File = withContext(ioDispatcher) {
         val fallbackTitle = displayName
             .substringBeforeLast('.', missingDelimiterValue = displayName)
             .takeIf { it.isNotBlank() }
@@ -552,6 +595,10 @@ class BookImportDataSource(
             val parsedBook = parser.parse(extractedRoot, fallbackTitle = fallbackTitle)
             val targetRoot = fileDataSource.createBookDirectoryForImportedTitle(parsedBook.title)
             if (targetRoot.listFiles()?.isNotEmpty() == true) {
+                val metadata = BookSidecarDataSource(ioDispatcher).loadMetadata(targetRoot)
+                check(metadata?.isPdf != true && fileDataSource.pdfFile(targetRoot, metadata) == null) {
+                    "A PDF with this title already exists."
+                }
                 targetRoot
             } else {
                 targetRoot.mkdirs()
@@ -559,6 +606,37 @@ class BookImportDataSource(
                 archiveFile.copyTo(packedEpub, overwrite = true)
                 targetRoot
             }
+        } finally {
+            importRoot.deleteRecursively()
+        }
+    }
+
+    private suspend fun importPdfBook(displayName: String, input: InputStream): File = withContext(ioDispatcher) {
+        val fallbackTitle = displayName
+            .substringBeforeLast('.', missingDelimiterValue = displayName)
+            .takeIf { it.isNotBlank() }
+            ?: error("Unable to determine PDF title.")
+        val importRoot = File(filesDir, "ImportTemp/${UUID.randomUUID()}").canonicalFile
+        val source = importRoot.resolve("source.pdf")
+        try {
+            importRoot.mkdirs()
+            source.outputStream().use { output -> input.copyTo(output) }
+            pdfParser.parse(source, fallbackTitle)
+            val targetRoot = fileDataSource.createBookDirectoryForImportedTitle(fallbackTitle)
+            if (targetRoot.listFiles()?.isNotEmpty() == true) {
+                val metadata = BookSidecarDataSource(ioDispatcher).loadMetadata(targetRoot)
+                check(metadata?.epub.isNullOrBlank() && fileDataSource.pdfFile(targetRoot, metadata) != null) {
+                    "Another book with this title already exists."
+                }
+                return@withContext targetRoot
+            }
+            try {
+                Files.move(source.toPath(), targetRoot.resolve("${targetRoot.name}.pdf").toPath())
+            } catch (error: Exception) {
+                targetRoot.delete()
+                throw error
+            }
+            targetRoot
         } finally {
             importRoot.deleteRecursively()
         }

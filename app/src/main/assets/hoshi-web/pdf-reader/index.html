@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' blob: data:; frame-src 'self'; base-uri 'none'; object-src 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PDF</title>
+<link rel="stylesheet" href="/pdfreader/pdf-reader.css">
+<script src="/popup/language-ja.js"></script>
+<script src="/popup/selection-ja.js"></script>
+<script src="/popup/selection-en.js"></script>
+<script src="/popup/selection.js"></script>
+<script src="/popup/reader-popup-host.js"></script>
+</head>
+<body>
+<div id="hoshi-pdf-viewport">
+  <div id="hoshi-pdf-pages"></div>
+</div>
+<script type="module" src="/pdfreader/pdf-reader.js"></script>
+</body>
+</html>

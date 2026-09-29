@@ -31,6 +31,20 @@ data class ImportFileType(
             unsupportedMessageRes = R.string.import_select_epub_book,
         )
 
+        val Pdf = ImportFileType(
+            description = "PDF book",
+            extensions = listOf("pdf"),
+            mimeTypes = arrayOf("application/pdf", "application/octet-stream"),
+            unsupportedMessageRes = R.string.import_select_pdf_book,
+        )
+
+        val Book = ImportFileType(
+            description = "book",
+            extensions = Epub.extensions + Pdf.extensions,
+            mimeTypes = (Epub.mimeTypes + Pdf.mimeTypes).distinct().toTypedArray(),
+            unsupportedMessageRes = R.string.import_select_book,
+        )
+
         val SasayakiSubtitle = ImportFileType(
             description = "subtitle",
             extensions = listOf("srt"),

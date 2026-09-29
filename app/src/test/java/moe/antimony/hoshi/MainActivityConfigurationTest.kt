@@ -144,6 +144,14 @@ class MainActivityConfigurationTest {
     }
 
     @Test
+    fun mainActivityAcceptsPdfExternalOpensWithoutClaimingGenericFiles() {
+        val activity = mainActivityManifestElement()
+        assertTrue(activity.hasIntentFilter("android.intent.action.VIEW", "application/pdf"))
+        assertFalse(activity.hasIntentFilter("android.intent.action.VIEW", "*/*"))
+        assertFalse(activity.hasIntentFilter("android.intent.action.VIEW", "application/octet-stream"))
+    }
+
+    @Test
     fun processTextLookupActivityAppearsInAndroidSelectedTextProcessMenu() {
         val activity = processTextLookupActivityManifestElement()
 

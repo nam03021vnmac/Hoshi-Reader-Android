@@ -33,6 +33,7 @@ import moe.antimony.hoshi.content.ContentLanguageProfile
 import moe.antimony.hoshi.features.reader.ReaderLoadingPage
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.ReaderWebView
+import moe.antimony.hoshi.features.reader.PdfReaderWebView
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
@@ -120,11 +121,20 @@ internal fun ReaderRouteDestination(
             coverPath = state.loadState.bookCoverFile?.absolutePath,
             loadGeneration = state.loadGeneration,
         )
+        is ReaderRouteRenderState.ReadyPdf -> ReaderBookCoverPublicationEvent.Ready(
+            bookId = state.loadState.entry.metadata.id,
+            coverPath = state.loadState.bookCoverFile?.absolutePath,
+            loadGeneration = state.loadGeneration,
+        )
     }
     LaunchedEffect(bookCoverPublicationEvent) {
-        val readyState = (routeState as? ReaderRouteRenderState.Ready)?.loadState
-        if (readyState != null && bookCoverPublicationCoordinator.shouldPublish(bookCoverPublicationEvent)) {
-            val result = bookCoverWallpaperViewModel.publishCurrentCover(readyState.bookCoverFile)
+        val coverFile = when (val state = routeState) {
+            is ReaderRouteRenderState.Ready -> state.loadState.bookCoverFile
+            is ReaderRouteRenderState.ReadyPdf -> state.loadState.bookCoverFile
+            else -> null
+        }
+        if (bookCoverPublicationCoordinator.shouldPublish(bookCoverPublicationEvent)) {
+            val result = bookCoverWallpaperViewModel.publishCurrentCover(coverFile)
             if (result.hasFailures) {
                 val message = when (bookCoverPublishFailureMessageRes(result)) {
                     R.string.book_cover_wallpaper_ireader_not_selected_error ->
@@ -133,8 +143,6 @@ internal fun ReaderRouteDestination(
                 }
                 bookCoverSnackbarHostState.showSnackbar(message)
             }
-        } else if (readyState == null) {
-            bookCoverPublicationCoordinator.shouldPublish(ReaderBookCoverPublicationEvent.NotReady)
         }
     }
 
@@ -249,6 +257,61 @@ internal fun ReaderRouteDestination(
                 )
             }
         }
+        is ReaderRouteRenderState.ReadyPdf -> {
+            val readyState = state.loadState
+            var routeReaderSettings by remember(readyState.entry.metadata.id, state.readerSettings) {
+                mutableStateOf(state.readerSettings)
+            }
+            LaunchedEffect(appContainer.readerSettingsRepository, readyState.entry.metadata.id, state.readerSettings) {
+                appContainer.readerSettingsRepository.settings.collect { settings ->
+                    routeReaderSettings = settings
+                }
+            }
+            Box(modifier = modifier.fillMaxSize()) {
+                PdfReaderWebView(
+                    bookId = bookId,
+                    book = readyState.book,
+                    pdfFile = readyState.pdfFile,
+                    bookEntry = readyState.entry,
+                    bookRoot = readyState.bookRoot,
+                    bookCoverFile = readyState.bookCoverFile,
+                    initialPageIndex = readyState.bookmark?.chapterIndex ?: 0,
+                    initialProgress = readyState.bookmark?.progress ?: 0.0,
+                    readerSettings = routeReaderSettings,
+                    onReaderSettingsChange = { transform ->
+                        routeReaderSettings = transform(routeReaderSettings)
+                        onReaderSettingsChange(transform)
+                    },
+                    onSaveBookmark = { pageIndex, progress, statistics ->
+                        autoSyncExportController.launchSave {
+                            try {
+                                stateHolder.saveBookmark(
+                                    state = readyState,
+                                    pageIndex = pageIndex,
+                                    progress = progress,
+                                    statistics = statistics,
+                                    onBookmarkSaved = onBookmarkSaved,
+                                )
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                bookmarkScope.launch { bookCoverSnackbarHostState.showSnackbar(statisticsSaveFailedMessage) }
+                            }
+                        }
+                        scheduleExport(readyState.entry)
+                    },
+                    onFlushAutoSyncExport = ::flushExport,
+                    onForegroundAutoSyncImport = { importOnForeground(readyState.entry) },
+                    contentLanguageProfile = state.contentLanguageProfile,
+                    onClose = onClose,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                SnackbarHost(
+                    hostState = bookCoverSnackbarHostState,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
+        }
     }
 }
 
@@ -257,6 +320,13 @@ internal sealed interface ReaderRouteRenderState {
 
     data class Ready(
         val loadState: ReaderRouteLoadState.Ready,
+        val readerSettings: ReaderSettings,
+        val contentLanguageProfile: ContentLanguageProfile,
+        val loadGeneration: Int = 0,
+    ) : ReaderRouteRenderState
+
+    data class ReadyPdf(
+        val loadState: ReaderRouteLoadState.ReadyPdf,
         val readerSettings: ReaderSettings,
         val contentLanguageProfile: ContentLanguageProfile,
         val loadGeneration: Int = 0,
@@ -297,6 +367,15 @@ internal suspend fun ReaderRouteLoadState.activateProfileAndPrepareRender(
         is ReaderRouteLoadState.Ready -> {
             val contentLanguageProfile = activateForBook(entry.metadata)
             ReaderRouteRenderState.Ready(
+                loadState = this,
+                readerSettings = loadReaderSettings(),
+                contentLanguageProfile = contentLanguageProfile,
+                loadGeneration = loadGeneration,
+            )
+        }
+        is ReaderRouteLoadState.ReadyPdf -> {
+            val contentLanguageProfile = activateForBook(entry.metadata)
+            ReaderRouteRenderState.ReadyPdf(
                 loadState = this,
                 readerSettings = loadReaderSettings(),
                 contentLanguageProfile = contentLanguageProfile,

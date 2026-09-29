@@ -40,12 +40,15 @@ data class BookMetadata(
     val lastAccess: Double,
     val renamedTitle: String? = null,
     val epub: String? = null,
+    val pdf: String? = null,
     val profileId: String? = null,
     val bookLanguage: String? = null,
     val author: String? = null,
 ) {
     val displayTitle: String
         get() = renamedTitle?.takeIf { it.isNotBlank() } ?: title.orEmpty()
+
+    val isPdf: Boolean get() = pdf != null
 }
 
 @Serializable
@@ -97,6 +100,10 @@ class BookStorage(filesDir: File) {
     suspend fun coverFile(entry: BookEntry): File? = repository.coverFile(entry)
 
     suspend fun epubFile(entry: BookEntry): File? = repository.epubFile(entry)
+
+    suspend fun pdfFile(entry: BookEntry): File? = repository.pdfFile(entry)
+
+    suspend fun pdfFile(bookRoot: File): File? = repository.pdfFile(bookRoot)
 
     suspend fun metadataCoverPath(bookRoot: File, coverHref: String?): String? =
         repository.metadataCoverPath(bookRoot, coverHref)

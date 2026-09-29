@@ -21,6 +21,17 @@ class FileImportContentContractTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
 
     @Test
+    fun bookPickerRequestsBothEpubAndPdfWithoutDuplicateMimeTypes() {
+        val intent = MultipleFileImportContent().createIntent(context, ImportFileType.Book.mimeTypes)
+        val types = requireNotNull(intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES)).toList()
+
+        assertTrue(types.contains("application/epub+zip"))
+        assertTrue(types.contains("application/pdf"))
+        assertEquals(types.distinct(), types)
+        assertTrue(intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false))
+    }
+
+    @Test
     fun singleFileImportUsesGetContentSoOtherAppsCanProvideFiles() {
         val mimeTypes = ImportFileType.Epub.mimeTypes
 

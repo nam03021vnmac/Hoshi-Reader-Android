@@ -38,6 +38,11 @@
     <string name="none" comment="Generic empty value label, intentionally matching bookshelf_no_shelf.">无</string>
     <string name="dialog_error_title">错误</string>
     <string name="import_select_epub_book">请选择 .epub EPUB 书籍文件。</string>
+    <string name="import_select_pdf_book">请选择 .pdf PDF 书籍文件。</string>
+    <string name="import_select_book">请选择 EPUB 或 PDF 书籍文件。</string>
+    <string name="pdf_zoom_out">缩小</string>
+    <string name="pdf_zoom_in">放大</string>
+    <string name="pdf_fit_width">适应宽度</string>
     <string name="import_select_srt_subtitle">请选择 .srt 字幕文件。</string>
     <string name="import_select_audiobook">请选择 .mp3、.m4b、.m4a 或 .opus 有声书文件。</string>
     <string name="import_select_audio_database">请选择 .db 音频数据库文件。</string>
@@ -118,17 +123,18 @@
     <string name="settings_title" comment="Shared label for settings page titles distinct from the main tab key.">设置</string>
     <string name="settings_language">语言</string>
     <string name="language_follow_system">跟随系统</string>
-    <string name="bookshelf_open_failed">无法打开 EPUB。</string>
-    <string name="bookshelf_import_failed">无法导入 EPUB。</string>
+    <string name="bookshelf_open_failed">无法打开书籍。</string>
+    <string name="bookshelf_import_failed">无法导入书籍。</string>
     <string name="bookshelf_import_failed_list_format" comment="Bookshelf batch import failure summary; intentionally matches the dictionary batch import format.">导入失败：\n%1$s</string>
     <string name="bookshelf_import_files">导入文件</string>
     <string name="bookshelf_import_folder">导入文件夹</string>
     <string name="bookshelf_scanning_folder">正在扫描文件夹...</string>
-    <string name="bookshelf_no_epub_files_found">未找到 EPUB 文件。</string>
-    <string name="bookshelf_importing_epub">正在导入 EPUB...</string>
+    <string name="bookshelf_no_book_files_found">未找到 EPUB 或 PDF 文件。</string>
+    <string name="bookshelf_importing_book">正在导入书籍...</string>
     <string name="bookshelf_exporting_epub">正在导出 EPUB...</string>
-    <string name="bookshelf_export_failed">无法导出 EPUB。</string>
-    <string name="bookshelf_exported_epub_format">已导出 %1$s。</string>
+    <string name="bookshelf_exporting_pdf">正在导出 PDF...</string>
+    <string name="bookshelf_export_failed">无法导出书籍。</string>
+    <string name="bookshelf_exported_book_format">已导出 %1$s。</string>
     <string name="bookshelf_importing_named_format">正在导入 %1$s...</string>
     <string name="bookshelf_importing_progress_format">正在导入 %1$d / %2$d...</string>
     <string name="bookshelf_legacy_migration_progress_format">正在整理旧版书籍 %1$d / %2$d...</string>
@@ -167,11 +173,12 @@
     <string name="bookshelf_cover_mode_show">显示</string>
     <string name="bookshelf_cover_mode_blur">模糊</string>
     <string name="bookshelf_cover_mode_hide">隐藏</string>
-    <string name="bookshelf_import_epub">导入 EPUB</string>
+    <string name="bookshelf_import_book">导入 EPUB 或 PDF</string>
     <string name="bookshelf_sync" comment="Bookshelf sync action, intentionally matching the Statistics settings Sync heading.">同步</string>
     <string name="bookshelf_move">移动</string>
     <string name="bookshelf_mark_read">标记已读</string>
     <string name="bookshelf_export_epub">导出 EPUB</string>
+    <string name="bookshelf_export_pdf">导出 PDF</string>
     <string name="bookshelf_reading_shelf">正在阅读书架</string>
     <string name="bookshelf_reading_shelf_description">显示已经开始但尚未读完的书籍。</string>
     <string name="bookshelf_shelves">书架</string>
@@ -186,7 +193,7 @@
     <string name="bookshelf_shelf_name">书架名称</string>
     <string name="bookshelf_add_shelf">添加书架</string>
     <string name="bookshelf_empty_title">没有书籍</string>
-    <string name="bookshelf_empty_message">使用 + 按钮导入 EPUB 开始阅读。</string>
+    <string name="bookshelf_empty_message">使用 + 按钮导入 EPUB 或 PDF 开始阅读。</string>
     <string name="bookshelf_selected">已选择</string>
     <string name="bookshelf_not_selected">未选择</string>
     <string name="bookshelf_read">已读</string>
@@ -645,7 +652,7 @@
     <string name="about_storage_no_leftovers">未找到可清理的应用存储残留。</string>
     <string name="about_storage_category_format">%1$s：%2$s（%3$s）</string>
     <string name="about_storage_category_anki_media_cache">Anki 媒体缓存</string>
-    <string name="about_storage_category_epub_import_residue">中断的 EPUB 导入</string>
+    <string name="about_storage_category_epub_import_residue">中断的书籍导入</string>
     <string name="about_storage_category_backup_restore_residue">中断的备份恢复</string>
     <string name="about_storage_category_dictionary_import_residue">中断的辞典导入</string>
     <string name="about_storage_category_local_audio_import_residue">中断的本地音频导入</string>

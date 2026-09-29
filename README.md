@@ -40,13 +40,13 @@ This project is a native Android recreation of [Hoshi Reader](https://github.com
 
 ### Bookshelf
 
-- Import EPUBs individually, in batches, or recursively from folders, and keep reading progress visible from the bookshelf.
+- Import EPUBs and PDFs individually, in batches, or recursively from folders, and keep reading progress visible from the bookshelf.
 - Organize books with custom shelves.
-- Export EPUBs or pull remote synced books back into the local library.
+- Export EPUBs and PDFs or pull remote synced books back into the local library.
 
 ### Reading
 
-- Read Japanese books in vertical or horizontal text, with paginated or continuous scrolling.
+- Read Japanese books in vertical or horizontal text, with paginated or continuous scrolling, and read PDF books with page restore and zoom.
 - Customize themes, fonts, paragraph spacing, and reader controls, including custom reader themes.
 - Use immersive focus mode, volume-key page turning, and e-ink display options.
 - Open reader images in fullscreen with zoom, copy, save, and share actions.
