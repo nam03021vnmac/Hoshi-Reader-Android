@@ -1,0 +1,78 @@
+package moe.antimony.hoshi.ocr
+
+import moe.antimony.hoshi.ocr.pdf.NormalizedQuad
+import moe.antimony.hoshi.ocr.pdf.OcrPageGeometryRecord
+import moe.antimony.hoshi.ocr.pdf.OcrPageRecord
+import moe.antimony.hoshi.ocr.pdf.OcrParagraphRecord
+import moe.antimony.hoshi.ocr.pdf.OcrRasterPlanRecord
+import moe.antimony.hoshi.ocr.pdf.OcrRawObservationRecord
+import moe.antimony.hoshi.ocr.pdf.OcrSpanRecord
+import moe.antimony.hoshi.ocr.pdf.PdfOcrPipeline
+import moe.antimony.hoshi.ocr.pdf.validateOrNull
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Test
+
+class PdfOcrModelsTest {
+    private fun validRecord(): OcrPageRecord {
+        val text = "今日は良い天気"
+        return OcrPageRecord(
+            sourceSha256 = "a".repeat(64),
+            pageIndex = 2,
+            engineId = "mlkit-ja-v2",
+            engineVersion = "16.0.1",
+            configHash = PdfOcrPipeline.configHash("mlkit-ja-v2", "16.0.1", false),
+            pageGeometry = OcrPageGeometryRecord(595, 842, 450.0, 600.0),
+            rasterPlan = OcrRasterPlanRecord(200, 1200, 1600, false),
+            revisionId = "rev-1",
+            status = "OcrReady",
+            rawObservations = listOf(OcrRawObservationRecord("mlkit-l0", text)),
+            paragraphs = listOf(OcrParagraphRecord("p0", listOf("mlkit-l0"), 0, text.length)),
+            canonicalText = text,
+            spans = listOf(OcrSpanRecord("mlkit-l0", 0, text.length)),
+        )
+    }
+
+    @Test
+    fun validRecordPassesValidation() {
+        assertNotNull(validRecord().validateOrNull())
+    }
+
+    @Test
+    fun outOfRangeSpanFailsClosed() {
+        val record = validRecord().copy(
+            spans = listOf(OcrSpanRecord("mlkit-l0", 0, 999)),
+        )
+        assertNull(record.validateOrNull())
+    }
+
+    @Test
+    fun nonFiniteQuadFailsClosed() {
+        val record = validRecord().copy(
+            spans = listOf(
+                OcrSpanRecord(
+                    "mlkit-l0",
+                    0,
+                    validRecord().canonicalText.length,
+                    NormalizedQuad(Float.NaN, 0f, 1f, 0f, 1f, 1f, 0f, 1f),
+                ),
+            ),
+        )
+        assertNull(record.validateOrNull())
+    }
+
+    @Test
+    fun configHashDistinguishesHighResAndEngine() {
+        val base = PdfOcrPipeline.configHash("mlkit-ja-v2", "16.0.1", false)
+        val highRes = PdfOcrPipeline.configHash("mlkit-ja-v2", "16.0.1", true)
+        val otherEngine = PdfOcrPipeline.configHash("paddle", "v6", false)
+        assertEquals(false, base == highRes)
+        assertEquals(false, base == otherEngine)
+    }
+
+    @Test
+    fun pipelineKeyIsStable() {
+        assertEquals("pdf-ocr-v1-mlkit-ja-v2-16.0.1", PdfOcrPipeline.pipelineKey("mlkit-ja-v2", "16.0.1"))
+    }
+}

@@ -14,7 +14,9 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
   Contents sheet with page slider and PDF chapter outline, a zoom-only
   Appearance sheet, volume-key page turning, tap lookup with
   recursive popups, highlights, reading statistics, bookshelf covers, and PDF
-  export. Theme, Statistics menu entries, book search, and Sasayaki audiobook
+  export. Scanned pages without selectable text can be read with on-device
+  Japanese OCR, with tap lookup, highlights, and offline reuse after the first
+  scan. Theme, Statistics menu entries, book search, and Sasayaki audiobook
   matching remain EPUB-only.
 - Add a Sasayaki setting that starts audiobook playback from the double-tapped reader line
   and keeps playing forward, without flashing a dictionary popup. While this setting is

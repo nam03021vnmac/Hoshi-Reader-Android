@@ -238,6 +238,7 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     implementation(libs.ankidroid.api)
     implementation(libs.google.dagger.hilt.android)
+    implementation(libs.mlkit.text.recognition.japanese)
     implementation(libs.kotlinx.serialization.json)
     implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
     ksp(libs.androidx.hilt.compiler)

@@ -43,6 +43,13 @@
     <string name="pdf_zoom_out">缩小</string>
     <string name="pdf_zoom_in">放大</string>
     <string name="pdf_fit_width">适应宽度</string>
+    <string name="pdf_ocr_scanning">正在扫描页面文字…</string>
+    <string name="pdf_ocr_failed">无法读取此页文字。</string>
+    <string name="pdf_ocr_unavailable">此页暂不支持文字识别。</string>
+    <string name="pdf_ocr_extraction_failed">无法读取内嵌文字，请尝试 OCR。</string>
+    <string name="pdf_ocr_run">运行 OCR</string>
+    <string name="pdf_ocr_try_again">再试一次</string>
+    <string name="pdf_ocr_keep_text">保留文字</string>
     <string name="import_select_srt_subtitle">请选择 .srt 字幕文件。</string>
     <string name="import_select_audiobook">请选择 .mp3、.m4b、.m4a 或 .opus 有声书文件。</string>
     <string name="import_select_audio_database">请选择 .db 音频数据库文件。</string>

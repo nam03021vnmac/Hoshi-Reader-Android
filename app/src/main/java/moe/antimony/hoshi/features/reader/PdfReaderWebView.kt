@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Rect
+import android.util.Log
 import android.view.ActionMode
 import android.view.KeyEvent
 import android.view.Menu
@@ -25,6 +26,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -128,6 +132,15 @@ internal fun PdfReaderWebView(
     val fontManager = appContainer.readerFontManager
     val ankiViewModel: AnkiViewModel = hiltViewModel()
     val ankiUiState by ankiViewModel.uiState.collectAsStateWithLifecycle()
+    val ocrViewModel: PdfOcrViewModel = hiltViewModel()
+    val ocrUiState by ocrViewModel.uiState.collectAsStateWithLifecycle()
+    val ocrSnackbarHostState = remember { SnackbarHostState() }
+    val ocrFailedText = stringResource(R.string.pdf_ocr_failed)
+    val ocrTryAgainText = stringResource(R.string.pdf_ocr_try_again)
+
+    LaunchedEffect(pdfFile, bookRoot, book.pageCount) {
+        ocrViewModel.attachBook(pdfFile, bookRoot, book.pageCount)
+    }
 
     var webView by remember { mutableStateOf<HoshiPdfReaderWebView?>(null) }
     var webViewGeneration by remember { mutableIntStateOf(0) }
@@ -655,7 +668,16 @@ internal fun PdfReaderWebView(
                     color = color,
                     createdAt = bookRepository.currentAppleReferenceDateSeconds(),
                 )
-                persistHighlights(highlights.orEmpty() + highlight)
+                // Persist the OCR revision pin before the highlight sidecar so a
+                // crash cannot leave a committed highlight without its source.
+                val ocrRecord = ocrUiState.pages[result.start]?.record
+                if (ocrRecord != null) {
+                    ocrViewModel.pinForHighlight(id, result.start) {
+                        persistHighlights(highlights.orEmpty() + highlight)
+                    }
+                } else {
+                    persistHighlights(highlights.orEmpty() + highlight)
+                }
             }
             is ReaderHighlightResult.Recolored,
             is ReaderHighlightResult.Removed,
@@ -663,11 +685,21 @@ internal fun PdfReaderWebView(
                 val current = highlights.orEmpty()
                 val next = ReaderHighlights.applyEdit(current, result, color)
                 if (next != current) persistHighlights(next)
+                if (result is ReaderHighlightResult.Removed) {
+                    val sourceHash = ocrUiState.sourceHash
+                    if (sourceHash != null) {
+                        ocrViewModel.unpinForHighlight(result.id)
+                    }
+                }
             }
         }
     }
     fun removeHighlight(highlight: ReaderHighlight) {
         persistHighlights(highlights.orEmpty().filterNot { it.id == highlight.id })
+        val sourceHash = ocrUiState.sourceHash
+        if (sourceHash != null) {
+            ocrViewModel.unpinForHighlight(highlight.id)
+        }
         webView?.evaluateJavascript(ReaderHighlightCommand.Remove(highlight.id).source, null)
     }
 
@@ -690,6 +722,7 @@ internal fun PdfReaderWebView(
     val currentHighlights = rememberUpdatedState(highlights)
     val currentPageIndex = rememberUpdatedState(pageIndex)
     val currentZoomFactor = rememberUpdatedState(zoomFactor)
+    val currentOcrSessionId = rememberUpdatedState(ocrUiState.sessionId)
     val handlePdfMessage: (PdfReaderMessage) -> Unit = { message ->
         when (message) {
             PdfReaderMessage.HostReady -> {
@@ -703,6 +736,7 @@ internal fun PdfReaderWebView(
                         pageIndex = currentPageIndex.value,
                         zoomFactor = currentZoomFactor.value,
                         highlightsJson = highlightsJson,
+                        sessionId = currentOcrSessionId.value,
                     ),
                     null,
                 )
@@ -713,6 +747,7 @@ internal fun PdfReaderWebView(
             is PdfReaderMessage.PageChanged -> {
                 if (message.pageCount > 0) pageCount = message.pageCount
                 val nextIndex = message.pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+                ocrViewModel.onViewportChanged((nextIndex - 1).coerceAtLeast(0), (nextIndex + 1).coerceAtMost((pageCount - 1).coerceAtLeast(0)))
                 if (nextIndex != pageIndex) {
                     closeLookupPopupsAndSelection()
                     enterFocusMode()
@@ -720,6 +755,28 @@ internal fun PdfReaderWebView(
                     pageIndex = nextIndex
                     recordStatisticsAtPage()
                     scheduleBookmarkSave()
+                }
+            }
+            is PdfReaderMessage.TextProbe -> {
+                // Kotlin validates the session against its active book; JS never
+                // supplies a filesystem path.
+                if (message.sessionId == currentOcrSessionId.value) {
+                    ocrViewModel.onTextProbe(
+                        PdfTextProbe(
+                            pageIndex = message.pageIndex,
+                            textLength = message.textLength,
+                            hasSuspectChars = message.hasSuspectChars,
+                            isSingleNumber = message.isSingleNumber,
+                            extractionFailed = message.extractionFailed,
+                            cssWidth = message.cssWidth,
+                            cssHeight = message.cssHeight,
+                        ),
+                    )
+                } else {
+                    Log.w(
+                        "PdfOcr",
+                        "Dropping textProbe for stale session page=${message.pageIndex}",
+                    )
                 }
             }
             is PdfReaderMessage.ZoomChanged -> {
@@ -744,6 +801,78 @@ internal fun PdfReaderWebView(
         }
     }
     val currentHandlePdfMessage = rememberUpdatedState(handlePdfMessage)
+
+    var deliveredOcrRevisions by remember { mutableStateOf(mapOf<Int, String>()) }
+    LaunchedEffect(ocrUiState.sessionId) {
+        deliveredOcrRevisions = emptyMap()
+    }
+    // attachBook rotates the session when the book changes; if the reader page
+    // already opened with the previous id, probes would be dropped as stale.
+    // Push the current id so JS and Kotlin agree without reopening the book.
+    LaunchedEffect(webView, ocrUiState.sessionId, isReaderReady) {
+        if (!isReaderReady) return@LaunchedEffect
+        val view = webView ?: return@LaunchedEffect
+        view.evaluateJavascript(
+            "window.hoshiPdfReader && window.hoshiPdfReader.setSessionId(${readerJavaScriptStringLiteral(ocrUiState.sessionId)})",
+            null,
+        )
+    }
+    LaunchedEffect(ocrUiState, webView, isReaderReady) {
+        if (!isReaderReady) return@LaunchedEffect
+        val view = webView ?: return@LaunchedEffect
+        val sessionId = ocrUiState.sessionId
+        val sourceHash = ocrUiState.sourceHash ?: return@LaunchedEffect
+        for ((pageIndex, pageState) in ocrUiState.pages) {
+            if (pageState.status != PdfOcrPageStatus.OcrReady) continue
+            val record = pageState.record ?: continue
+            if (deliveredOcrRevisions[pageIndex] == record.revisionId) continue
+            if (record.canonicalText.length > 20000 || record.spans.size > 2000) continue
+            val payload = PdfOcrPayload(
+                sessionId = sessionId,
+                pageIndex = pageIndex,
+                requestId = pageState.requestId,
+                revisionId = record.revisionId,
+                sourceHash = sourceHash,
+                canonicalText = record.canonicalText,
+                spans = record.spans.map { span ->
+                    val slice = record.canonicalText.substring(span.startUtf16.coerceIn(0, record.canonicalText.length), span.endUtf16.coerceIn(0, record.canonicalText.length))
+                    PdfOcrSpanPayload(
+                        sourceId = span.sourceId,
+                        startUtf16 = span.startUtf16,
+                        endUtf16 = span.endUtf16,
+                        text = slice,
+                        quad = span.quad?.let { quad ->
+                            PdfOcrQuadPayload(quad.x0, quad.y0, quad.x1, quad.y1, quad.x2, quad.y2, quad.x3, quad.y3)
+                        },
+                    )
+                },
+                cssWidth = record.pageGeometry.cssWidth,
+                cssHeight = record.pageGeometry.cssHeight,
+            )
+            val payloadJson = runCatching { pdfReaderJson.encodeToString(payload) }.getOrNull() ?: continue
+            // Bound payload size; OCR strings become DOM textContent, never HTML.
+            if (payloadJson.length > 500000) continue
+            view.evaluateJavascript(pdfOcrApplyScript(payloadJson), null)
+            deliveredOcrRevisions = deliveredOcrRevisions + (pageIndex to record.revisionId)
+        }
+    }
+    val currentPageOcrState = ocrUiState.pages[pageIndex]
+    LaunchedEffect(currentPageOcrState?.status, currentPageOcrState?.error, pageIndex) {
+        if (currentPageOcrState?.status == PdfOcrPageStatus.Failed && currentPageOcrState.retryable) {
+            val result = ocrSnackbarHostState.showSnackbar(
+                message = ocrFailedText,
+                actionLabel = ocrTryAgainText,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                val geometry = currentPageOcrState.record?.pageGeometry
+                if (geometry != null && geometry.cssWidth > 0 && geometry.cssHeight > 0) {
+                    ocrViewModel.retryWithProbe(pageIndex, geometry.cssWidth, geometry.cssHeight, highRes = false)
+                } else {
+                    ocrViewModel.retry(pageIndex, highRes = false)
+                }
+            }
+        }
+    }
 
     fun closeReader() {
         bookmarkSaveJob?.cancel()
@@ -1048,6 +1177,39 @@ internal fun PdfReaderWebView(
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
+        PdfOcrStatusOverlay(
+            pageState = currentPageOcrState,
+            onRunOcr = {
+                val geometry = currentPageOcrState?.record?.pageGeometry
+                if (geometry != null && geometry.cssWidth > 0 && geometry.cssHeight > 0) {
+                    ocrViewModel.useOcrForSuspect(pageIndex, geometry.cssWidth, geometry.cssHeight)
+                } else {
+                    ocrViewModel.retry(pageIndex, highRes = false)
+                }
+            },
+            onKeepText = { ocrViewModel.useEmbedded(pageIndex) },
+            onRetryHighRes = {
+                val geometry = currentPageOcrState?.record?.pageGeometry
+                if (geometry != null && geometry.cssWidth > 0 && geometry.cssHeight > 0) {
+                    ocrViewModel.retryWithProbe(pageIndex, geometry.cssWidth, geometry.cssHeight, highRes = true)
+                } else {
+                    ocrViewModel.retry(pageIndex, highRes = true)
+                }
+            },
+            onRetry = {
+                val geometry = currentPageOcrState?.record?.pageGeometry
+                if (geometry != null && geometry.cssWidth > 0 && geometry.cssHeight > 0) {
+                    ocrViewModel.retryWithProbe(pageIndex, geometry.cssWidth, geometry.cssHeight, highRes = false)
+                } else {
+                    ocrViewModel.retry(pageIndex, highRes = false)
+                }
+            },
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = topInfoPadding + 48.dp),
+        )
+        SnackbarHost(
+            hostState = ocrSnackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp),
+        )
     }
 
     if (showGoTo) {
@@ -1194,6 +1356,7 @@ private fun pdfReaderSetupScript(
     pageIndex: Int,
     zoomFactor: Double,
     highlightsJson: String,
+    sessionId: String,
 ): String {
     val highlightsLiteral = readerJavaScriptStringLiteral(highlightsJson)
     return """
@@ -1215,8 +1378,55 @@ private fun pdfReaderSetupScript(
           window.hoshiPdfReader.open({
             url: '/pdfbook/data',
             pageIndex: $pageIndex,
-            zoomFactor: $zoomFactor
+            zoomFactor: $zoomFactor,
+            sessionId: ${readerJavaScriptStringLiteral(sessionId)}
           });
+        })();
+    """.trimIndent()
+}
+
+@Serializable
+private data class PdfOcrSpanPayload(
+    val sourceId: String,
+    val startUtf16: Int,
+    val endUtf16: Int,
+    val text: String,
+    val quad: PdfOcrQuadPayload? = null,
+)
+
+@Serializable
+private data class PdfOcrQuadPayload(
+    val x0: Float,
+    val y0: Float,
+    val x1: Float,
+    val y1: Float,
+    val x2: Float,
+    val y2: Float,
+    val x3: Float,
+    val y3: Float,
+)
+
+@Serializable
+private data class PdfOcrPayload(
+    val sessionId: String,
+    val pageIndex: Int,
+    val requestId: Int,
+    val revisionId: String,
+    val sourceHash: String,
+    val canonicalText: String,
+    val spans: List<PdfOcrSpanPayload>,
+    val cssWidth: Double,
+    val cssHeight: Double,
+)
+
+private fun pdfOcrApplyScript(payloadJson: String): String {
+    val literal = readerJavaScriptStringLiteral(payloadJson)
+    return """
+        (function() {
+          try {
+            var payload = JSON.parse($literal);
+            if (window.hoshiPdfOcr) window.hoshiPdfOcr.applyOcr(payload);
+          } catch (e) {}
         })();
     """.trimIndent()
 }
@@ -1265,6 +1475,16 @@ internal sealed interface PdfReaderMessage {
     data class ZoomChanged(val zoomFactor: Double) : PdfReaderMessage
     data class Outline(val items: List<PdfOutlineItem>) : PdfReaderMessage
     data class Tap(val x: Double, val y: Double) : PdfReaderMessage
+    data class TextProbe(
+        val sessionId: String,
+        val pageIndex: Int,
+        val textLength: Int,
+        val hasSuspectChars: Boolean,
+        val isSingleNumber: Boolean,
+        val extractionFailed: Boolean,
+        val cssWidth: Double,
+        val cssHeight: Double,
+    ) : PdfReaderMessage
     data object LoadFailed : PdfReaderMessage
 
     companion object {
@@ -1290,6 +1510,16 @@ internal sealed interface PdfReaderMessage {
                 "tap" -> Tap(
                     x = payload["x"]?.toString()?.toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null,
                     y = payload["y"]?.toString()?.toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null,
+                )
+                "textProbe" -> TextProbe(
+                    sessionId = payload["sessionId"]?.toString()?.trim('"').orEmpty(),
+                    pageIndex = payload["pageIndex"]?.toString()?.toIntOrNull() ?: return null,
+                    textLength = payload["textLength"]?.toString()?.toIntOrNull()?.coerceIn(0, 20000) ?: return null,
+                    hasSuspectChars = payload["hasSuspectChars"]?.toString() == "true",
+                    isSingleNumber = payload["isSingleNumber"]?.toString() == "true",
+                    extractionFailed = payload["extractionFailed"]?.toString() == "true",
+                    cssWidth = payload["cssWidth"]?.toString()?.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 } ?: 0.0,
+                    cssHeight = payload["cssHeight"]?.toString()?.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 } ?: 0.0,
                 )
                 "loadFailed" -> LoadFailed
                 else -> null

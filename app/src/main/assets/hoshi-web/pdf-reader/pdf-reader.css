@@ -130,3 +130,16 @@ body {
 .hoshi-pdf-text-layer span[data-hoshi-highlight-id] {
   border-radius: 2px;
 }
+
+.hoshi-pdf-ocr-layer {
+  opacity: 1;
+}
+
+.hoshi-pdf-ocr-layer span {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  overflow: hidden;
+}

@@ -295,6 +295,21 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   controls. PDF has no Theme/Display entry, statistics sheet, TOC, book
   search, or Sasayaki matching; its `bookinfo.json` shims `characterCount`
   as the page count.
+- Scanned PDF pages without usable embedded text use on-device OCR behind the
+  same PDF reader. Kotlin owns raster (`PdfRenderer` at ~200 DPI capped at 3 MP,
+  300 DPI bounded retry), bundled ML Kit Japanese recognition, deterministic
+  Japanese layout/ruby postprocessing, and a versioned store under
+  `noBackupFilesDir/pdf-ocr/<source-sha256>/`. The entry-scoped
+  `PdfOcrViewModel` queues missing-text pages automatically, keeps suspect text
+  embedded until an explicit Run OCR override, and installs one atomic OCR text
+  layer per page (`pdf-ocr-layer.js`) satisfying the existing page-index/UTF-16
+  highlight contract. OCR revisions are pinned before highlight sidecar writes;
+  zoom never invalidates OCR. The Kotlin session id is the authority: when it
+  rotates after the reader page already opened, push it via
+  `hoshiPdfReader.setSessionId` so later probes are not dropped as stale.
+  Terminal OCR failure stays visible in the page-local overlay with its
+  localized error and a retry affordance when retryable, never only a
+  transient Snackbar.
 - Reader `bookinfo.json` sidecars persist whole-book/spine character counts plus
   optional iOS-compatible TOC fragment offsets and a first-appearance raster
   image inventory. A reader-facts schema version invalidates stale derived

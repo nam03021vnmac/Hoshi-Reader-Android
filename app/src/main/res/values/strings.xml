@@ -43,6 +43,13 @@
     <string name="pdf_zoom_out">Zoom out</string>
     <string name="pdf_zoom_in">Zoom in</string>
     <string name="pdf_fit_width">Fit width</string>
+    <string name="pdf_ocr_scanning">Scanning page for text…</string>
+    <string name="pdf_ocr_failed">Couldn’t read text on this page.</string>
+    <string name="pdf_ocr_unavailable">Text recognition isn’t available for this page.</string>
+    <string name="pdf_ocr_extraction_failed">Couldn’t read embedded text. Try OCR.</string>
+    <string name="pdf_ocr_run">Run OCR</string>
+    <string name="pdf_ocr_try_again">Try again</string>
+    <string name="pdf_ocr_keep_text">Keep text</string>
     <string name="import_select_srt_subtitle">Select a .srt subtitle file.</string>
     <string name="import_select_audiobook">Select a .mp3, .m4b, .m4a, or .opus audiobook file.</string>
     <string name="import_select_audio_database">Select a .db audio database file.</string>
