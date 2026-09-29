@@ -1,3 +1,4 @@
+import hoshi.build.PreparePaddleOcrTask
 import hoshi.build.PrepareSherpaTask
 import java.io.File as JFile
 import java.nio.file.Paths as JPaths
@@ -199,7 +200,21 @@ val prepareSherpa by tasks.registering(PrepareSherpaTask::class) {
     outputDirectory.set(layout.buildDirectory.dir("generated/sherpa"))
     assetsDirectory.set(outputDirectory.dir("assets"))
 }
+val preparePaddleOcr by tasks.registering(PreparePaddleOcrTask::class) {
+    detUrl.set("https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/main/inference.onnx")
+    detSha256.set("d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e")
+    detBytes.set(9880512L)
+    recUrl.set("https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/main/inference.onnx")
+    recSha256.set("5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634")
+    recBytes.set(21159378L)
+    recConfigUrl.set("https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/main/inference.yml")
+    recConfigSha256.set("ab078671bb49f06228eadccd34f1bb501e157f7a047095ffb943ba81512c77d1")
+    recConfigBytes.set(150579L)
+    outputDirectory.set(layout.buildDirectory.dir("generated/paddleocr"))
+    assetsDirectory.set(outputDirectory.dir("assets"))
+}
 androidComponents.onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(preparePaddleOcr, PreparePaddleOcrTask::getAssetsDirectory)
     variant.sources.assets?.addGeneratedSourceDirectory(prepareSherpa, PrepareSherpaTask::getAssetsDirectory)
 }
 
@@ -238,7 +253,7 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     implementation(libs.ankidroid.api)
     implementation(libs.google.dagger.hilt.android)
-    implementation(libs.mlkit.text.recognition.japanese)
+    implementation(libs.onnxruntime.android)
     implementation(libs.kotlinx.serialization.json)
     implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
     ksp(libs.androidx.hilt.compiler)
@@ -358,6 +373,7 @@ val buildRustAndroidRelease by tasks.registering(Exec::class) {
 tasks.named("preBuild") {
     dependsOn(generateUniffiKotlin)
     dependsOn(prepareSherpa)
+    dependsOn(preparePaddleOcr)
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {

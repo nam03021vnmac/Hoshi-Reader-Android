@@ -38,6 +38,10 @@
 # JNA also ships desktop AWT integration classes that are unused on Android.
 -dontwarn java.awt.**
 
+# ONNX Runtime Android bindings are resolved reflectively; keep them in
+# minimized builds per the official Android build guidance.
+-keep class ai.onnxruntime.** { *; }
+
 # sherpa-onnx JNI resolves config fields, result constructors, and methods by name.
 -keep class com.k2fsa.sherpa.onnx.** { *; }
 

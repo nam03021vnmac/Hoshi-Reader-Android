@@ -2,10 +2,11 @@
 
 Date: 2026-09-29
 
-Status: Original architecture proposal. A bundled ML Kit PDF OCR implementation
-now exists; see `docs/ARCHITECTURE.md` for current implementation facts. The
-benchmark targets and unimplemented capabilities below remain proposals, not
-validated results.
+Status: Original architecture proposal. The production backend is now
+bundled PP-OCRv6_small (detection + recognition on ONNX Runtime, dependency-free
+image math, build-time pinned official weights); see `docs/ARCHITECTURE.md`
+for current implementation facts. The benchmark targets and unimplemented
+capabilities below remain proposals, not validated results.
 
 ## 1. Recommendation
 
@@ -14,20 +15,14 @@ for visible pages, zoom and text interaction; Kotlin owns OCR execution, Japanes
 layout reconstruction and persistent results. Run OCR automatically when a page has
 no usable embedded text, without delaying display of the scanned page.
 
-The recommended first production backend is **bundled ML Kit Text Recognition v2,
-Japanese**, with **PP-OCRv6_small detection + recognition on ONNX Runtime as the
-required accuracy/speed challenger before the backend decision is finalized**.
-ML Kit is the integration baseline because it has a supported Android API, immediate
-offline model availability, and structured text geometry. This is an engineering
-recommendation, not evidence that ML Kit has the lowest Japanese character error
-rate or fastest inference. [Google's Android integration guide](https://developers.google.com/ml-kit/vision/text-recognition/v2/android)
-documents these APIs and delivery options.
+The production backend is **bundled PP-OCRv6_small detection + recognition
+on ONNX Runtime**, replacing the former ML Kit baseline for its Japanese
+vertical-prose and ruby accuracy headroom. ML Kit Text Recognition v2 Japanese
+remains the documented benchmark baseline for the quality/latency gate in
+section 11, not a shipped backend.
 
-For a Japanese-first product, do not ship solely on the strength of the ML Kit SDK:
-vertical prose, ruby and dense scans must pass the benchmark in section 11. If
-PP-OCRv6_small materially improves those cases within the latency/memory budget,
-make it the default instead. Keep the backend interface small so this does not
-change the reader, persistence or lookup implementation. Do not run two complete
+The backend interface stays small so future engine changes do not affect the
+reader, persistence or lookup implementation. Do not run two complete
 engines on every page.
 
 Adapt substantial parts of Chimahon's Japanese paragraph reconstruction, reading
@@ -87,7 +82,7 @@ recognition does not replace it with reflowed text or automatically open a popup
 
 | Candidate | Fit for this task | Decision |
 | --- | --- | --- |
-| Bundled ML Kit Japanese v2 | Official Android integration; blocks/lines/elements/symbols and geometry; model available without an initial download. Japanese performance must be measured separately from Latin. | First backend and benchmark baseline. Use `com.google.mlkit:text-recognition-japanese:16.0.1`, the version currently shown in Google's guide; pin/recheck when implementing. |
+| Bundled ML Kit Japanese v2 | Official Android integration; blocks/lines/elements/symbols and geometry; model available without an initial download. Japanese performance must be measured separately from Latin. | Former backend, now removed; retained as the benchmark baseline for the section 11 quality/latency gate. |
 | PP-OCRv6_small | Current Paddle family intended for mobile/desktop; small and medium support Japanese. Official Android deployment uses ONNX Runtime and exposes polygons/confidence. | Required challenger; preferred replacement if it wins the Japanese quality/latency gate. |
 | PP-OCRv6_tiny | The official model description explicitly excludes Japanese from tiny. | Do not use the tiny recognizer for this Japanese feature. |
 | PP-OCRv5_mobile | Earlier mobile baseline with Japanese support; useful if the v6 export/runtime regresses on a supported device. | Secondary benchmark, not the assumed newest model. |
@@ -104,11 +99,9 @@ Primary references: [ML Kit](https://developers.google.com/ml-kit/vision/text-re
 Published desktop/GPU timings and aggregate model accuracy are not Android Japanese
 PDF measurements and must not be copied into Hoshi performance claims.
 
-For ML Kit, retain element/symbol output where available instead of flattening
-`Text.text`. Missing geometry/confidence is represented explicitly. Confidence is
-engine-specific and must not be compared directly across backends. Google's
-[line API](https://developers.google.com/android/reference/com/google/mlkit/vision/text/Text.Line)
-also documents unavailable-confidence behavior in older unbundled deployments.
+For PP-OCRv6_small, line-level text comes from the CTC head, so retain the
+detection quad per line instead of expecting symbol output. Confidence is
+engine-specific and must not be compared directly across backends.
 
 For Paddle, start from the official Android SDK/source and pinned official model
 artifacts. Its demo documents an API-26 minimum, ONNX Runtime and OpenCV; that does
@@ -116,6 +109,10 @@ not establish compatibility with Hoshi's complete native dependency graph. Audit
 ABI coverage, release shrinking, native-library collisions with transcription,
 16 KB page-size support and total installed size, following
 [Android's native page-size guidance](https://developer.android.com/guide/practices/page-sizes).
+Pin `onnxruntime-android` to 1.27.0 or newer: full 16 KB-page compatibility for
+the Android package landed in 1.27.0, which Google Play requires for apps
+targeting Android 15+. Keep the R8 `-keep class ai.onnxruntime.**` rule from
+the official Android build guidance.
 Use CPU first; benchmark any
 accelerator against it. [ONNX Runtime's mobile guide](https://onnxruntime.ai/docs/tutorials/mobile/)
 describes Android execution options. Model weights, recognition dictionary,
@@ -141,7 +138,7 @@ flowchart TD
     Repo --> Cache[Versioned OCR store]
     Repo --> Queue[Bounded page scheduler]
     Queue --> Raster[PdfOcrRasterizer]
-    Raster --> Engine[OcrEngine: ML Kit or Paddle]
+    Raster --> Engine[OcrEngine: PP-OCRv6_small]
     Engine --> Post[Japanese layout and ruby processing]
     Post --> Cache
     Cache --> Layer[PDF OCR text layer and range map]
@@ -153,7 +150,7 @@ flowchart TD
 | `features/reader/PdfOcrViewModel.kt` | `@HiltViewModel`, scoped to the Reader Nav3 entry; immutable page states as `StateFlow`; viewport/retry/mode events. No Activity-wide scope. |
 | `ocr/pdf/PdfOcrRepository.kt` | Resolve book source, fingerprint it, deduplicate requests, orchestrate raster/engine/postprocessor/store and coordinate book deletion. Expose main-safe suspend/Flow APIs. |
 | `ocr/pdf/PdfOcrRasterizer.kt` | Own read-only file descriptors, `PdfRenderer`, render matrices, tiles and bitmap lifetime. Serialized renderer access on an injected worker dispatcher. |
-| `ocr/OcrEngine.kt`, `ocr/mlkit/MlKitJapaneseOcrEngine.kt` | Backend interface and ML Kit adapter. Reuse a recognizer/session; never create one per Composable or line. |
+| `ocr/OcrEngine.kt`, `ocr/paddle/PaddleOcrEngine.kt` | Backend interface and PP-OCRv6_small adapter (ONNX Runtime sessions, dependency-free detection/recognition math, bundled pinned weights). Reuse the session holder; never create one per Composable or line. |
 | `ocr/paddle/PaddleOcrEngine.kt` | Benchmark/optional adapter with its own validated model/runtime lifecycle. |
 | `ocr/layout/JapaneseOcrPostprocessor.kt` | Pure deterministic layout, ruby association and ordered text construction. No UI, dictionary repository or `Context`. |
 | `ocr/pdf/PdfOcrStore.kt` | Atomic per-page records, revisions, pinned highlight snapshots, quota and invalidation. Kotlin Serialization. |
@@ -482,7 +479,7 @@ not deletion of the PDF or its annotations.
 
 1. **Evidence and geometry prototype:** assemble licensed/tracked fixtures, compare
    native raster alignment with pdf.js across crop/rotation cases, then benchmark
-   bundled ML Kit and official PP-OCRv6_small with raw output retained. Resolve
+    production PP-OCRv6_small with raw output retained. Resolve
    backend and geometry gates before building extensive UI.
 2. **Vertical slice:** route-scoped ViewModel, native raster owner, one engine,
    page availability probe, bounded scheduling, versioned store and one-page OCR
@@ -526,9 +523,9 @@ region geometry and tap-to-character targets. Report:
 - Peak app/native/WebView memory, model/download/installed size, sustained CPU load,
   UI frame stalls and battery impact while turning pages and looking up words.
 
-Compare raw ML Kit, ML Kit plus each stage, full ML Kit processing, and equivalently
-processed PP-OCRv6_small. Test the same raster plans and then each engine's tuned
-plan. Record model hashes, runtime, thread count, ABI, OS and device. Include a
+Compare production PP-OCRv6_small against the ML Kit baseline and each
+post-processing stage with raw output retained. Test the same raster plans
+and then each engine's tuned plan. Record model hashes, runtime, thread count, ABI, OS and device. Include a
 current phone and a slower supported device/E-ink reader; emulator timing is not
 the engine-selection evidence.
 

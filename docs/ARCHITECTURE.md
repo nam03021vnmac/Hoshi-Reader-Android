@@ -297,7 +297,9 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   as the page count.
 - Scanned PDF pages without usable embedded text use on-device OCR behind the
   same PDF reader. Kotlin owns raster (`PdfRenderer` at ~200 DPI capped at 3 MP,
-  300 DPI bounded retry), bundled ML Kit Japanese recognition, deterministic
+  300 DPI bounded retry), bundled PP-OCRv6_small Japanese recognition on
+  ONNX Runtime (detection plus CTC recognition from build-time pinned
+  official weights, no OpenCV), deterministic
   Japanese layout/ruby postprocessing, and a versioned store under
   `noBackupFilesDir/pdf-ocr/<source-sha256>/`. The entry-scoped
   `PdfOcrViewModel` queues missing-text pages automatically, keeps suspect text

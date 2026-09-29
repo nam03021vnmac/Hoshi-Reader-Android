@@ -5,11 +5,11 @@ import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import moe.antimony.hoshi.ocr.OcrEngine
-import moe.antimony.hoshi.ocr.mlkit.MlKitJapaneseOcrEngine
+import moe.antimony.hoshi.ocr.paddle.PaddleOcrEngine
 
 @Module
 @InstallIn(SingletonComponent::class)
 internal abstract class OcrModule {
     @Binds
-    abstract fun bindOcrEngine(impl: MlKitJapaneseOcrEngine): OcrEngine
+    abstract fun bindOcrEngine(impl: PaddleOcrEngine): OcrEngine
 }

@@ -20,17 +20,17 @@ class PdfOcrModelsTest {
         return OcrPageRecord(
             sourceSha256 = "a".repeat(64),
             pageIndex = 2,
-            engineId = "mlkit-ja-v2",
-            engineVersion = "16.0.1",
-            configHash = PdfOcrPipeline.configHash("mlkit-ja-v2", "16.0.1", false),
+            engineId = "paddle-ppocrv6-small",
+            engineVersion = "20260618",
+            configHash = PdfOcrPipeline.configHash("paddle-ppocrv6-small", "20260618", false),
             pageGeometry = OcrPageGeometryRecord(595, 842, 450.0, 600.0),
             rasterPlan = OcrRasterPlanRecord(200, 1200, 1600, false),
             revisionId = "rev-1",
             status = "OcrReady",
-            rawObservations = listOf(OcrRawObservationRecord("mlkit-l0", text)),
-            paragraphs = listOf(OcrParagraphRecord("p0", listOf("mlkit-l0"), 0, text.length)),
+            rawObservations = listOf(OcrRawObservationRecord("paddle-l0", text)),
+            paragraphs = listOf(OcrParagraphRecord("p0", listOf("paddle-l0"), 0, text.length)),
             canonicalText = text,
-            spans = listOf(OcrSpanRecord("mlkit-l0", 0, text.length)),
+            spans = listOf(OcrSpanRecord("paddle-l0", 0, text.length)),
         )
     }
 
@@ -42,7 +42,7 @@ class PdfOcrModelsTest {
     @Test
     fun outOfRangeSpanFailsClosed() {
         val record = validRecord().copy(
-            spans = listOf(OcrSpanRecord("mlkit-l0", 0, 999)),
+            spans = listOf(OcrSpanRecord("paddle-l0", 0, 999)),
         )
         assertNull(record.validateOrNull())
     }
@@ -52,7 +52,7 @@ class PdfOcrModelsTest {
         val record = validRecord().copy(
             spans = listOf(
                 OcrSpanRecord(
-                    "mlkit-l0",
+                    "paddle-l0",
                     0,
                     validRecord().canonicalText.length,
                     NormalizedQuad(Float.NaN, 0f, 1f, 0f, 1f, 1f, 0f, 1f),
@@ -64,8 +64,8 @@ class PdfOcrModelsTest {
 
     @Test
     fun configHashDistinguishesHighResAndEngine() {
-        val base = PdfOcrPipeline.configHash("mlkit-ja-v2", "16.0.1", false)
-        val highRes = PdfOcrPipeline.configHash("mlkit-ja-v2", "16.0.1", true)
+        val base = PdfOcrPipeline.configHash("paddle-ppocrv6-small", "20260618", false)
+        val highRes = PdfOcrPipeline.configHash("paddle-ppocrv6-small", "20260618", true)
         val otherEngine = PdfOcrPipeline.configHash("paddle", "v6", false)
         assertEquals(false, base == highRes)
         assertEquals(false, base == otherEngine)
@@ -73,6 +73,6 @@ class PdfOcrModelsTest {
 
     @Test
     fun pipelineKeyIsStable() {
-        assertEquals("pdf-ocr-v1-mlkit-ja-v2-16.0.1", PdfOcrPipeline.pipelineKey("mlkit-ja-v2", "16.0.1"))
+        assertEquals("pdf-ocr-v1-paddle-ppocrv6-small-20260618", PdfOcrPipeline.pipelineKey("paddle-ppocrv6-small", "20260618"))
     }
 }
