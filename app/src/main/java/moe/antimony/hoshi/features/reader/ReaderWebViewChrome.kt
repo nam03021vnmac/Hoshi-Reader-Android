@@ -383,7 +383,7 @@ internal fun BoxScope.ReaderBottomChrome(
     menuExpanded: Boolean,
     onDismissMenu: () -> Unit,
     onGoTo: () -> Unit,
-    onDisplaySettings: () -> Unit,
+    onDisplaySettings: (() -> Unit)?,
     onReadingSettings: () -> Unit,
     onStatistics: (() -> Unit)?,
     onSasayaki: (() -> Unit)?,
@@ -642,7 +642,7 @@ private fun ReaderMenuCard(
     colors: ReaderChromeColors,
     metrics: ReaderBottomChromeMetrics,
     onGoTo: () -> Unit,
-    onDisplaySettings: () -> Unit,
+    onDisplaySettings: (() -> Unit)?,
     onReadingSettings: () -> Unit,
     onStatistics: (() -> Unit)?,
     onSasayaki: (() -> Unit)?,
@@ -674,6 +674,7 @@ private fun ReaderMenuCard(
             modifier = Modifier.padding(vertical = metrics.menuVerticalPaddingDp.dp),
         ) {
             readerBottomMenuVisualOrder(
+                showDisplay = onDisplaySettings != null,
                 showStatistics = onStatistics != null,
                 showSasayaki = onSasayaki != null,
             ).forEachIndexed { index, destination ->
@@ -695,7 +696,7 @@ private fun ReaderMenuCard(
                         },
                         colors = colors,
                         metrics = metrics,
-                        onClick = onDisplaySettings,
+                        onClick = onDisplaySettings ?: return@forEachIndexed,
                     )
 
                     ReaderMenuDestination.ReadingSettings -> ReaderMenuItem(

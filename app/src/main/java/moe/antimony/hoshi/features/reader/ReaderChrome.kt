@@ -340,6 +340,7 @@ private fun readerTopJumpHistoryIconSizeDp(topSafeAreaDp: Int): Int =
     (topSafeAreaDp / 3 + 6).coerceIn(16, 28)
 
 fun readerBottomMenuVisualOrder(
+    showDisplay: Boolean = true,
     showStatistics: Boolean,
     showSasayaki: Boolean,
 ): List<ReaderMenuDestination> = buildList {
@@ -347,7 +348,7 @@ fun readerBottomMenuVisualOrder(
     if (showStatistics) add(ReaderMenuDestination.Statistics)
     add(ReaderMenuDestination.GoTo)
     add(ReaderMenuDestination.ReadingSettings)
-    add(ReaderMenuDestination.Display)
+    if (showDisplay) add(ReaderMenuDestination.Display)
 }
 
 fun readerSasayakiBottomPlaybackControls(

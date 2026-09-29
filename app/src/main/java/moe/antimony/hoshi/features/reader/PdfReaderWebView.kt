@@ -63,6 +63,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
 import moe.antimony.hoshi.LocalHoshiUiDependencies
 import moe.antimony.hoshi.R
@@ -90,8 +91,6 @@ import moe.antimony.hoshi.features.dictionary.dismissPopupAt
 import moe.antimony.hoshi.features.dictionary.lookupOptions
 import moe.antimony.hoshi.features.dictionary.openPopupExternalLink
 import moe.antimony.hoshi.features.dictionary.withLookupPopupVisualOptions
-import moe.antimony.hoshi.features.display.DisplaySettingsSheet
-import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
 import kotlin.math.roundToInt
 
@@ -118,7 +117,6 @@ internal fun PdfReaderWebView(
     val context = LocalContext.current
     val view = LocalView.current
     val appContainer = LocalHoshiUiDependencies.current
-    val profileState by appContainer.profileRepository.state.collectAsStateWithLifecycle()
     val systemDarkTheme = isSystemInDarkTheme()
     val effectiveSettings = readerSettings
     val scope = rememberCoroutineScope()
@@ -126,35 +124,22 @@ internal fun PdfReaderWebView(
     val dictionaryRepository = appContainer.dictionaryRepository
     val dictionarySettingsRepository = appContainer.dictionarySettingsRepository
     val audioSettingsRepository = appContainer.audioSettingsRepository
-    val sasayakiSettingsRepository = appContainer.sasayakiSettingsRepository
     val statisticsDateProvider = appContainer.statisticsDateProvider
     val fontManager = appContainer.readerFontManager
     val ankiViewModel: AnkiViewModel = hiltViewModel()
     val ankiUiState by ankiViewModel.uiState.collectAsStateWithLifecycle()
-    var sasayakiSettings by remember { mutableStateOf(SasayakiSettings()) }
-    LaunchedEffect(sasayakiSettingsRepository) {
-        sasayakiSettingsRepository.settings.collect { settings ->
-            sasayakiSettings = settings
-        }
-    }
-    fun updateSasayakiSettings(settings: SasayakiSettings) {
-        sasayakiSettings = settings
-        scope.launch {
-            sasayakiSettingsRepository.update { settings }
-        }
-    }
 
     var webView by remember { mutableStateOf<HoshiPdfReaderWebView?>(null) }
     var webViewGeneration by remember { mutableIntStateOf(0) }
     var pageIndex by remember(book) { mutableIntStateOf(initialPageIndex.coerceIn(0, (book.pageCount - 1).coerceAtLeast(0))) }
     var pageCount by remember(book) { mutableIntStateOf(book.pageCount) }
+    var pdfOutline by remember(book) { mutableStateOf<List<PdfOutlineItem>>(emptyList()) }
     var zoomFactor by remember { mutableDoubleStateOf(1.0) }
     var isReaderReady by remember(book) { mutableStateOf(false) }
     var loadFailed by remember(book) { mutableStateOf(false) }
     var focusMode by remember { mutableStateOf(false) }
     var showReaderMenu by remember { mutableStateOf(false) }
     var showAppearance by remember { mutableStateOf(false) }
-    var showDisplaySettings by remember { mutableStateOf(false) }
     var showGoTo by remember { mutableStateOf(false) }
     val progressDisplay = readerProgressDisplay(contentLanguageProfile)
 
@@ -219,7 +204,6 @@ internal fun PdfReaderWebView(
         }
     }
     var statisticsState by remember(statisticsTracker) { mutableStateOf(statisticsTracker?.state) }
-    var showStatistics by remember { mutableStateOf(false) }
     fun syncStatisticsState() {
         statisticsState = statisticsTracker?.state
     }
@@ -273,10 +257,6 @@ internal fun PdfReaderWebView(
             syncStatisticsState()
         }
     }
-    LaunchedEffect(statisticsTracker, showStatistics) {
-        statisticsTracker?.setModalPaused(showStatistics, currentCharacterCount())
-    }
-
     // ---- Lookup popup state ---------------------------------------------------
     var lookupPopups by remember { mutableStateOf<List<LookupPopupItem>>(emptyList()) }
     var readerPopupHistories by remember { mutableStateOf<Map<String, ReaderPopupHistoryCounts>>(emptyMap()) }
@@ -745,6 +725,9 @@ internal fun PdfReaderWebView(
             is PdfReaderMessage.ZoomChanged -> {
                 zoomFactor = message.zoomFactor
             }
+            is PdfReaderMessage.Outline -> {
+                pdfOutline = message.items
+            }
             is PdfReaderMessage.Tap -> {
                 handlePdfTap(
                     x = message.x,
@@ -1057,9 +1040,9 @@ internal fun PdfReaderWebView(
                 menuExpanded = showReaderMenu,
                 onDismissMenu = { showReaderMenu = false },
                 onGoTo = { showReaderMenu = false; showGoTo = true },
-                onDisplaySettings = { showReaderMenu = false; showDisplaySettings = true },
+                onDisplaySettings = null,
                 onReadingSettings = { showReaderMenu = false; showAppearance = true },
-                onStatistics = { showReaderMenu = false; showStatistics = true },
+                onStatistics = null,
                 onSasayaki = null,
                 metrics = bottomChromeMetrics,
                 modifier = Modifier.align(Alignment.BottomCenter),
@@ -1068,42 +1051,26 @@ internal fun PdfReaderWebView(
     }
 
     if (showGoTo) {
-        PdfGoToSheet(
+        PdfContentsSheet(
             pageIndex = pageIndex,
             pageCount = pageCount,
-            zoomFactor = zoomFactor,
+            outline = pdfOutline,
             progressDisplay = progressDisplay,
             onPageJump = ::jumpToPageIndex,
-            onZoomIn = { webView?.evaluateJavascript("window.hoshiPdfReader.zoomIn()", null) },
-            onZoomOut = { webView?.evaluateJavascript("window.hoshiPdfReader.zoomOut()", null) },
-            onFitWidth = { webView?.evaluateJavascript("window.hoshiPdfReader.fitWidth()", null) },
+            onChapterJump = { target ->
+                jumpToPageIndex(target)
+                showGoTo = false
+            },
             onDismiss = { showGoTo = false },
         )
     }
     if (showAppearance) {
-        ReaderAppearanceSheet(
-            settings = effectiveSettings,
-            profileName = profileState.effectiveProfile.name,
-            progressDisplay = progressDisplay,
-            onSettingsChange = onReaderSettingsChange,
-            sasayakiSettings = sasayakiSettings,
-            onSasayakiSettingsChange = ::updateSasayakiSettings,
-            fontManager = fontManager,
+        PdfAppearanceSheet(
+            zoomFactor = zoomFactor,
+            onZoomIn = { webView?.evaluateJavascript("window.hoshiPdfReader.zoomIn()", null) },
+            onZoomOut = { webView?.evaluateJavascript("window.hoshiPdfReader.zoomOut()", null) },
+            onFitWidth = { webView?.evaluateJavascript("window.hoshiPdfReader.fitWidth()", null) },
             onDismiss = { showAppearance = false },
-        )
-    }
-    if (showDisplaySettings) {
-        DisplaySettingsSheet(onDismiss = { showDisplaySettings = false })
-    }
-    if (showStatistics && statisticsTracker != null) {
-        ReaderStatisticsSheet(
-            state = statisticsState ?: statisticsTracker.state,
-            currentCharacter = currentCharacterCount(),
-            currentChapterEndCharacter = pageCount,
-            totalCharacters = pageCount,
-            progressDisplay = progressDisplay,
-            onToggleTracking = ::toggleStatisticsTracking,
-            onDismiss = { showStatistics = false },
         )
     }
 
@@ -1282,6 +1249,13 @@ private data class PdfHighlightPayload(
     }
 }
 
+@Serializable
+internal data class PdfOutlineItem(
+    val title: String = "",
+    val pageIndex: Int = -1,
+    val children: List<PdfOutlineItem> = emptyList(),
+)
+
 private val pdfReaderJson = Json { encodeDefaults = true }
 
 internal sealed interface PdfReaderMessage {
@@ -1289,6 +1263,7 @@ internal sealed interface PdfReaderMessage {
     data object Ready : PdfReaderMessage
     data class PageChanged(val pageIndex: Int, val pageCount: Int) : PdfReaderMessage
     data class ZoomChanged(val zoomFactor: Double) : PdfReaderMessage
+    data class Outline(val items: List<PdfOutlineItem>) : PdfReaderMessage
     data class Tap(val x: Double, val y: Double) : PdfReaderMessage
     data object LoadFailed : PdfReaderMessage
 
@@ -1306,6 +1281,11 @@ internal sealed interface PdfReaderMessage {
                 )
                 "zoomChanged" -> ZoomChanged(
                     zoomFactor = payload["zoomFactor"]?.toString()?.toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null,
+                )
+                "outline" -> Outline(
+                    items = payload["items"]?.let { element ->
+                        runCatching { json.decodeFromJsonElement<List<PdfOutlineItem>>(element) }.getOrDefault(emptyList())
+                    } ?: emptyList(),
                 )
                 "tap" -> Tap(
                     x = payload["x"]?.toString()?.toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null,

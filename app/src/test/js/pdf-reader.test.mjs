@@ -73,7 +73,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function reader({ count = 12, pendingRender = false, pendingText = false, texts = ['alpha', 'beta.'] } = {}) {
+function reader({ count = 12, pendingRender = false, pendingText = false, texts = ['alpha', 'beta.'], outline = null, dests = {} } = {}) {
   const viewport = new Element('div');
   const root = viewport.appendChild(new Element('div'));
   const frames = [];
@@ -94,6 +94,12 @@ function reader({ count = 12, pendingRender = false, pendingText = false, texts 
   });
   const pdf = {
     numPages: count,
+    async getOutline() { return outline; },
+    async getDestination(id) { return dests[id]; },
+    async getPageIndex(ref) {
+      if (!Number.isSafeInteger(ref?.pageIndex)) throw new Error('bad ref');
+      return ref.pageIndex;
+    },
     async getPage(number) {
       pageRequests.push(number);
       if (pageGate) await pageGate.promise;
@@ -469,4 +475,44 @@ test('pinch prevents native scrolling and cancellation or third fingers leave no
   r.viewport.dispatch('touchstart', { touches });
   r.viewport.dispatch('touchcancel');
   assert.equal(r.root.style.transform, '');
+});
+
+test('document outline resolves named and explicit destinations to page indices', async () => {
+  const r = reader({
+    outline: [
+      {
+        title: 'Part', dest: null, items: [
+          { title: 'Chapter 1', dest: 'ch1', items: [] },
+          { title: 'Chapter 2', dest: [{ pageIndex: 4 }, { name: 'XYZ' }], items: [] },
+          { title: 'No target', dest: 'missing', items: [] },
+          { title: 42, dest: 'ch1', items: [] },
+        ],
+      },
+    ],
+    dests: { ch1: [{ pageIndex: 1 }, { name: 'Fit' }] },
+  });
+  await r.api.open();
+  await r.flush();
+  await r.flush();
+  assert.deepEqual(r.messages.find((message) => message.type === 'outline'), {
+    type: 'outline',
+    items: [
+      {
+        title: 'Part', pageIndex: -1,
+        children: [
+          { title: 'Chapter 1', pageIndex: 1, children: [] },
+          { title: 'Chapter 2', pageIndex: 4, children: [] },
+          { title: 'No target', pageIndex: -1, children: [] },
+        ],
+      },
+    ],
+  });
+});
+
+test('missing outline posts an empty chapter list instead of failing open', async () => {
+  const r = reader({ outline: null });
+  await r.api.open();
+  await r.flush();
+  assert.deepEqual(r.messages.find((message) => message.type === 'outline'), { type: 'outline', items: [] });
+  assert.ok(r.messages.some((message) => message.type === 'ready'));
 });

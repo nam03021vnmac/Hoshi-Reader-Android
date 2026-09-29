@@ -608,6 +608,52 @@ function highlightColorOf(background) {
   return palette[background] || 'yellow';
 }
 
+// --- Outline (Contents) -------------------------------------------------------
+
+const OUTLINE_MAX_DEPTH = 32;
+
+async function outlinePageIndex(dest) {
+  try {
+    // Named destinations resolve through getDestination; explicit destination
+    // arrays are used directly. Both end in a page reference for getPageIndex.
+    const explicit = typeof dest === 'string' ? await state.pdf.getDestination(dest) : dest;
+    if (!Array.isArray(explicit) || explicit.length === 0) return -1;
+    const pageIndex = await state.pdf.getPageIndex(explicit[0]);
+    return Number.isSafeInteger(pageIndex) ? pageIndex : -1;
+  } catch {
+    return -1;
+  }
+}
+
+async function resolveOutlineEntry(entry, depth) {
+  if (!entry || typeof entry.title !== 'string' || depth > OUTLINE_MAX_DEPTH) return null;
+  const children = [];
+  for (const child of entry.items || []) {
+    const resolved = await resolveOutlineEntry(child, depth + 1);
+    if (resolved) children.push(resolved);
+  }
+  return {
+    title: entry.title,
+    pageIndex: await outlinePageIndex(entry.dest),
+    children,
+  };
+}
+
+async function reportOutline() {
+  try {
+    if (!state.pdf) return;
+    const outline = await state.pdf.getOutline();
+    const items = [];
+    for (const entry of outline || []) {
+      const resolved = await resolveOutlineEntry(entry, 0);
+      if (resolved) items.push(resolved);
+    }
+    postMessage({ type: 'outline', items });
+  } catch {
+    postMessage({ type: 'outline', items: [] });
+  }
+}
+
 // --- Public API ---------------------------------------------------------------
 
 window.hoshiPdfReader = {
@@ -637,6 +683,7 @@ window.hoshiPdfReader = {
         ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, config.zoomFactor))
         : 1.0;
       await buildPageLayout();
+      void reportOutline();
       if (config.highlights !== undefined) applyHighlightIndex(config.highlights);
       const initialPage = Math.min(
         state.pageCount - 1,

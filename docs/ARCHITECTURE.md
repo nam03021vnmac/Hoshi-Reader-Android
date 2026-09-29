@@ -289,9 +289,12 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   page index through the shared bookmark sidecar, and reuses the shared reader
   chrome (title/progress bubble, bottom menu, focus mode, system bars, volume
   keys), lookup popup stack, highlight sidecars (page index as `character`),
-  and reading statistics. Its Go-To sheet offers a page slider and zoom
-  controls instead of EPUB chapters. PDF has no TOC, book search, or Sasayaki
-  matching; its `bookinfo.json` shims `characterCount` as the page count.
+  and reading statistics. Its Tune menu keeps only Contents and Appearance:
+  Contents pairs a page slider with the PDF outline chapters resolved through
+  pdf.js named/explicit destinations, while Appearance offers only PDF zoom
+  controls. PDF has no Theme/Display entry, statistics sheet, TOC, book
+  search, or Sasayaki matching; its `bookinfo.json` shims `characterCount`
+  as the page count.
 - Reader `bookinfo.json` sidecars persist whole-book/spine character counts plus
   optional iOS-compatible TOC fragment offsets and a first-appearance raster
   image inventory. A reader-facts schema version invalidates stale derived
