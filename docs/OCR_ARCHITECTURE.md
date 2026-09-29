@@ -2,7 +2,10 @@
 
 Date: 2026-09-29
 
-Status: Proposed architecture; no OCR implementation or device benchmark is included.
+Status: Original architecture proposal. A bundled ML Kit PDF OCR implementation
+now exists; see `docs/ARCHITECTURE.md` for current implementation facts. The
+benchmark targets and unimplemented capabilities below remain proposals, not
+validated results.
 
 ## 1. Recommendation
 

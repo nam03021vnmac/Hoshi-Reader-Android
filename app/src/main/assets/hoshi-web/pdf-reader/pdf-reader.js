@@ -364,12 +364,20 @@ function probeEmbeddedText(record, extractionFailed) {
 function installOcrPayload(record, payload, viewport) {
   const layerApi = globalThis.hoshiPdfOcrLayer;
   if (!layerApi || !record.div) return false;
-  const cssWidth = record.baseWidth > 0 ? record.baseWidth : payload.cssWidth;
-  const cssHeight = record.baseHeight > 0 ? record.baseHeight : payload.cssHeight;
-  if (!Number.isFinite(cssWidth) || !Number.isFinite(cssHeight) || cssWidth <= 0 || cssHeight <= 0) return false;
+  const baseWidth = record.baseWidth > 0 ? record.baseWidth : payload.cssWidth;
+  const baseHeight = record.baseHeight > 0 ? record.baseHeight : payload.cssHeight;
+  if (!Number.isFinite(baseWidth) || !Number.isFinite(baseHeight) || baseWidth <= 0 || baseHeight <= 0) return false;
+  // The page div displays at base dimensions scaled to fit width/zoom, while
+  // the stored payload keeps unscaled base dimensions for geometry parity.
+  // Build the selectable overlay at the currently displayed CSS size so taps
+  // hit the visible glyphs; canvas pixels already use this scaled viewport.
+  const scale = currentCssScale();
+  if (!Number.isFinite(scale) || scale <= 0) return false;
+  const cssWidth = baseWidth * scale;
+  const cssHeight = baseHeight * scale;
   const built = layerApi.buildOcrDom(document, payload, cssWidth, cssHeight);
   if (!built) return false;
-  built.layer.style.setProperty('--scale-factor', String(viewport ? viewport.scale : 1));
+  built.layer.style.setProperty('--scale-factor', String(scale));
   record.textLayer?.cancel?.();
   record.textLayer = null;
   record.textLayerDiv?.remove();

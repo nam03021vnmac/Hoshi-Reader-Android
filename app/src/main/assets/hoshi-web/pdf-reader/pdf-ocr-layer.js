@@ -130,26 +130,6 @@
     layer.dataset.ocrRevision = valid.revisionId;
 
     const textNodes = [];
-    let offset = 0;
-    const pushText = (text) => {
-      if (!text.length) return;
-      const node = document.createTextNode ? document.createTextNode(text) : null;
-      // Test harness Element supports textContent children without createTextNode.
-      if (node) {
-        // Wrap each span slice so offsets stay mappable after highlight moves.
-        const span = document.createElement('span');
-        span.textContent = text;
-        positionSpan(span, null, width, height, text);
-        layer.appendChild(span);
-        const walkerNode = span.children && span.children[0] ? span.children[0] : { textContent: text };
-        textNodes.push({ node: walkerNode, start: offset, end: offset + text.length });
-      } else {
-        const span = document.createElement('span');
-        span.textContent = text;
-        layer.appendChild(span);
-      }
-      offset += text.length;
-    };
 
     // Group spans by paragraph breaks encoded in canonicalText '\n'.
     const canonical = valid.canonicalText;
@@ -175,14 +155,9 @@
             newlineHolder.textContent = '\n';
             newlineHolder.setAttribute && newlineHolder.setAttribute('data-hoshi-ocr-newline', '1');
             layer.appendChild(newlineHolder);
-            const holderNode = newlineHolder.children && newlineHolder.children[0]
-              ? newlineHolder.children[0]
-              : { textContent: '\n' };
-            textNodes.push({ node: holderNode, start: offset, end: offset + 1 });
-            offset += 1;
+            textNodes.push({ node: newlineHolder.firstChild, start: cursor, end: cursor + 1 });
           } else {
             pushTextWithGeometry(document, layer, textNodes, gap, null, width, height);
-            offset = textNodes.length ? textNodes[textNodes.length - 1].end : offset;
           }
         }
         cursor = span.startUtf16;
@@ -192,7 +167,7 @@
       cursor = span.endUtf16;
     }
     if (cursor < canonical.length) {
-      pushText(canonical.slice(cursor));
+      pushTextWithGeometry(document, layer, textNodes, canonical.slice(cursor), null, width, height);
     }
 
     return { layer, textNodes, pageText: layer.textContent };
@@ -211,13 +186,12 @@
     layer.appendChild(element);
     const start = textNodes.length ? textNodes[textNodes.length - 1].end : 0;
     // Mirror the pdf-reader walker shape: text node + half-open offsets.
-    const textNode = element.children && element.children[0] ? element.children[0] : { textContent: text };
+    const textNode = element.firstChild;
     const end = start + text.length;
     textNodes.push({ node: textNode, start, end });
   }
 
   function positionSpan(element, quad, width, height, text) {
-    element.dataset = element.dataset || {};
     if (!quad) {
       element.style.position = 'absolute';
       return;

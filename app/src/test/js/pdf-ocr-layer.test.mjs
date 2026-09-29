@@ -14,41 +14,63 @@ function loadLayer() {
 }
 
 function fakeDocument() {
-  const texts = [];
-  const makeElement = (tag) => ({
-    tagName: tag.toUpperCase(),
-    children: [],
-    dataset: {},
-    style: {},
-    className: '',
-    textContent: '',
-    appendChild(child) {
-      this.children.push(child);
-      child.parentElement = this;
-      if (child.textContent && !child.children?.length) {
-        // Keep textContent in sync for assertions.
-      }
-      return child;
-    },
-    setAttribute() {},
-  });
-  Object.defineProperty(makeElement('p'), 'textContent', {
-    get() { return ''; },
-  });
-  return {
-    createElement: (tag) => {
-      const el = makeElement(tag);
-      Object.defineProperty(el, 'textContent', {
-        get() { return this.children.map((c) => c.textContent ?? '').join('') + (this._text ?? ''); },
-        set(v) {
-          this._text = v;
-          this.children = v ? [{ textContent: v }] : [];
-        },
-      });
-      return el;
-    },
-    createTextNode: (text) => ({ textContent: text }),
+  const createTextNode = (text) => ({ nodeType: 3, textContent: text, parentNode: null, parentElement: null });
+  const makeElement = (tag) => {
+    const dataset = {};
+    return {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      childNodes: [],
+      parentNode: null,
+      parentElement: null,
+      get children() { return this.childNodes.filter((child) => child.nodeType === 1); },
+      get firstChild() { return this.childNodes[0] ?? null; },
+      get dataset() { return dataset; },
+      style: {},
+      className: '',
+      get textContent() { return this.childNodes.map((child) => child.textContent).join(''); },
+      set textContent(value) {
+        for (const child of this.childNodes) {
+          child.parentNode = null;
+          child.parentElement = null;
+        }
+        this.childNodes = [];
+        if (value) this.appendChild(createTextNode(value));
+      },
+      appendChild(child) {
+        this.childNodes.push(child);
+        child.parentNode = this;
+        child.parentElement = this;
+        return child;
+      },
+      setAttribute() {},
+    };
   };
+  return {
+    createElement: makeElement,
+    createTextNode,
+  };
+}
+
+function assertCanonicalNodes(built, canonicalText, offsets) {
+  assert.equal(built.pageText, canonicalText);
+  assert.equal(built.layer.textContent, canonicalText);
+  const attachedNodes = built.layer.childNodes.flatMap((child) => child.childNodes);
+  assert.equal(built.textNodes.length, attachedNodes.length);
+  assert.deepEqual(Array.from(built.textNodes, ({ start, end }) => [start, end]), offsets);
+  let cursor = 0;
+  for (const [index, { node, start, end }] of built.textNodes.entries()) {
+    assert.equal(node, attachedNodes[index]);
+    assert.equal(node.nodeType, 3);
+    assert.equal(node.parentNode.parentNode, built.layer);
+    assert.equal(node.parentElement.firstChild, node);
+    assert.equal(node.parentElement.children.length, 0);
+    assert.equal(start, cursor);
+    assert.equal(end, start + node.textContent.length);
+    assert.equal(node.textContent, canonicalText.slice(start, end));
+    cursor = end;
+  }
+  assert.equal(cursor, canonicalText.length);
 }
 
 test('whitespace-only embedded text is missing and single characters stay usable', () => {
@@ -95,11 +117,35 @@ test('canonical DOM keeps paragraph separators as offsets, not bare <br>', () =>
   };
   const built = layer.buildOcrDom(document, payload, 450, 600);
   assert.ok(built);
-  assert.equal(built.pageText.includes('あいう'), true);
-  assert.equal(built.pageText.includes('えお'), true);
-  // Offsets cover the newline separator explicitly.
-  const offsets = built.textNodes.map((n) => [n.start, n.end]);
-  assert.ok(offsets.some(([s, e]) => e - s === 1));
+  assertCanonicalNodes(built, payload.canonicalText, [[0, 3], [3, 4], [4, 6]]);
+});
+
+test('canonical DOM registers attached UTF16 text nodes for gaps and trailing slices', () => {
+  const layer = loadLayer();
+  for (const { canonicalText, ranges, offsets } of [
+    {
+      canonicalText: ' \u{1F600}A\nB--C\u{1F600}\n',
+      ranges: [[3, 4], [5, 6], [8, 9]],
+      offsets: [[0, 3], [3, 4], [4, 5], [5, 6], [6, 8], [8, 9], [9, 12]],
+    },
+    {
+      canonicalText: '\u{1F600}\nA\nB\n',
+      ranges: [[0, 2], [3, 4], [5, 6]],
+      offsets: [[0, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7]],
+    },
+    { canonicalText: '\u{1F600}\ntext', ranges: [], offsets: [[0, 7]] },
+    { canonicalText: '', ranges: [], offsets: [] },
+  ]) {
+    const payload = {
+      sessionId: 's1', pageIndex: 0, requestId: 1, revisionId: 'r1', sourceHash: 'a'.repeat(64),
+      canonicalText,
+      spans: ranges.map(([startUtf16, endUtf16], index) => ({
+        sourceId: `l${index}`, startUtf16, endUtf16, text: canonicalText.slice(startUtf16, endUtf16),
+      })),
+      cssWidth: 450, cssHeight: 600,
+    };
+    assertCanonicalNodes(layer.buildOcrDom(fakeDocument(), payload), canonicalText, offsets);
+  }
 });
 
 test('range projection uses OCR quads, not font metrics', () => {

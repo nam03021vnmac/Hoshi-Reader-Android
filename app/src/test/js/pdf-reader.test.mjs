@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const asset = (path) => fs.readFileSync(new URL(`../../main/assets/hoshi-web/${path}`, import.meta.url), 'utf8');
 const runtime = asset('pdf-reader/pdf-reader.js').replace(/^import .*;$/m, '');
+const ocrLayerRuntime = asset('pdf-reader/pdf-ocr-layer.js');
 
 class Element {
   constructor(tagName) {
@@ -47,6 +48,8 @@ class Element {
     this.children = text ? [{ nodeType: 3, textContent: text, parentElement: this, parentNode: this }] : [];
   }
   get textContent() { return this.children.map((child) => child.textContent).join(''); }
+  get firstChild() { return this.children[0] ?? null; }
+  setAttribute() {}
   get offsetWidth() { return parseFloat(this.style.width) || 0; }
   get offsetHeight() {
     const [width, height] = (this.style.aspectRatio || '1 / 1').split('/').map(Number);
@@ -252,9 +255,10 @@ function reader({ count = 12, pendingRender = false, pendingText = false, texts 
     requestAnimationFrame: (callback) => frames.push(callback),
   });
   vm.runInContext(asset('shared/selection.js'), context);
+  vm.runInContext(ocrLayerRuntime, context);
   vm.runInContext(runtime, context);
   return {
-    api: window.hoshiPdfReader, highlights: window.hoshiHighlights,
+    api: window.hoshiPdfReader, highlights: window.hoshiHighlights, ocr: window.hoshiPdfOcr,
     window, document, viewport, root, renders, textLayers, messages, loads, pageRequests, cleanedPages,
     get destroyed() { return destroyed; },
     failLoad(value) { loadError = value; },
@@ -529,4 +533,47 @@ test('missing outline posts an empty chapter list instead of failing open', asyn
   await r.flush();
   assert.deepEqual(r.messages.find((message) => message.type === 'outline'), { type: 'outline', items: [] });
   assert.ok(r.messages.some((message) => message.type === 'ready'));
+});
+
+test('ocr overlay tracks the displayed page scale so ruby taps hit visible glyphs', async () => {
+  const r = reader();
+  await r.api.open({ sessionId: 's1' });
+  await r.flush();
+  const payload = {
+    sessionId: 's1',
+    pageIndex: 0,
+    requestId: 1,
+    revisionId: 'r1',
+    sourceHash: 'a'.repeat(64),
+    canonicalText: 'しゅう',
+    spans: [{
+      sourceId: 'mlkit-l1',
+      startUtf16: 0,
+      endUtf16: 3,
+      text: 'しゅう',
+      quad: { x0: 0.25, y0: 0.25, x1: 0.5, y1: 0.25, x2: 0.5, y2: 0.5, x3: 0.25, y3: 0.5 },
+    }],
+    cssWidth: 600,
+    cssHeight: 800,
+  };
+  assert.equal(r.ocr.applyOcr(payload), true);
+  const layerAt = () => r.root.children[0].children.find((child) => child.classList.contains('hoshi-pdf-ocr-layer'));
+  let layer = layerAt();
+  assert.ok(layer);
+  assert.equal(layer.textContent, 'しゅう');
+  // Fit-width scale is 1 here, so the overlay matches the base 600x800 page.
+  assert.equal(layer.children[0].style.left, '150px');
+  assert.equal(layer.children[0].style.top, '200px');
+
+  r.api.setZoomFactor(2);
+  await r.flush();
+  await r.flush();
+  layer = layerAt();
+  assert.ok(layer);
+  assert.equal(layer.textContent, 'しゅう');
+  // The cached revision reinstalls at the zoomed 1200x1600 display size.
+  assert.equal(layer.children[0].style.left, '300px');
+  assert.equal(layer.children[0].style.top, '400px');
+  assert.equal(layer.children[0].style.width, '300px');
+  assert.equal(layer.children[0].style.height, '400px');
 });
