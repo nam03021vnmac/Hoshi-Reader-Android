@@ -1254,39 +1254,14 @@ private fun handlePdfTap(
 ) {
     val currentWebView = webView ?: return
     if (currentWebView.isNativeSelectionActionModeActive()) return
-    if (popups.isNotEmpty()) {
-        // Use the displayed WebView size so touch blocking matches the rendered
-        // popup stack. A fixed huge viewport always places the popup below the
-        // selection, while the real layout shows it above when space below is
-        // short; that mismatch incorrectly swallowed taps on other rows.
-        val density = currentWebView.resources.displayMetrics.density.takeIf { it > 0 } ?: 0f
-        val viewportWidth = if (currentWebView.width > 0 && density > 0) {
-            currentWebView.width / density.toDouble()
-        } else {
-            0.0
-        }
-        val viewportHeight = if (currentWebView.height > 0 && density > 0) {
-            currentWebView.height / density.toDouble()
-        } else {
-            0.0
-        }
-        if (viewportWidth > 0 && viewportHeight > 0 &&
-            readerLookupPopupTouchBlocksReaderGesture(
-                popups = popups.mapIndexed { index, popup ->
-                    ReaderLookupPopupFramePayload.fromPopup(
-                        popup = popup,
-                        popupIndex = index,
-                        viewport = ReaderLookupPopupViewport(width = viewportWidth, height = viewportHeight),
-                        includeInitialEntryJson = false,
-                    )
-                },
-                x = x,
-                y = y,
-            )
-        ) {
-            return
-        }
-    }
+    // Popup taps never reach the viewport touch listener: the popup layer is a
+    // sibling of #hoshi-pdf-viewport appended to documentElement, so touches on
+    // visible popup shells do not post Tap messages. Every Tap here is already
+    // outside the rendered popup stack, so no Kotlin frame blocking is needed.
+    // (EPUB needs it because its WebView-level touch listener sees all touches,
+    // but PDF uses the inner viewport div listener.) Previously a fixed huge
+    // viewport predicted below-only placement and incorrectly swallowed taps on
+    // other rows when the real popup was above.
     currentWebView.evaluateJavascript(
         ReaderSelectionCommand.SelectText(
             x = x.toFloat(),

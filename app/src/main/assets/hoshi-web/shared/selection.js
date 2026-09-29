@@ -399,9 +399,7 @@ window.hoshiSelection = {
                 return null;
             }
 
-            const container = this.findParagraph(element) ||
-                element.closest('p, div, span, ruby, a') ||
-                document.body;
+            const container = element.closest('p, div, span, ruby, a') || document.body;
             const walker = this.createWalker(container);
 
             const range = document.createRange();
