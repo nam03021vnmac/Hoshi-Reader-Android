@@ -427,3 +427,93 @@ test('reader repaint unwraps fragments before clearing IDs across repeated updat
     assertCanonicalNodes(built, built.pageText, [[0, 5]]);
   }
 });
+
+test('geometry-free slices stay out of hit-testing instead of stacking at the origin', () => {
+  const layer = loadLayer();
+  const document = fakeDocument();
+  const payload = {
+    sessionId: 's1', pageIndex: 1, requestId: 2, revisionId: 'r2', sourceHash: 'b'.repeat(64),
+    canonicalText: 'あいう\nえお',
+    spans: [
+      { sourceId: 'l0', startUtf16: 0, endUtf16: 3, text: 'あいう', quad: { x0: 0.1, y0: 0.1, x1: 0.9, y1: 0.1, x2: 0.9, y2: 0.2, x3: 0.1, y3: 0.2 } },
+      { sourceId: 'l1', startUtf16: 4, endUtf16: 6, text: 'えお', quad: { x0: 0.1, y0: 0.3, x1: 0.9, y1: 0.3, x2: 0.9, y2: 0.4, x3: 0.1, y3: 0.4 } },
+    ],
+    cssWidth: 450, cssHeight: 600,
+  };
+  const built = layer.buildOcrDom(document, payload, 450, 600);
+  assert.ok(built);
+  // Newline holder keeps the UTF-16 offset but never produces a (0,0) tap box.
+  const newlineSpan = built.layer.childNodes.find((child) => child.tagName === 'SPAN' && child.textContent === '\n');
+  assert.ok(newlineSpan);
+  assert.equal(newlineSpan.style.display, 'none');
+  // Trailing/leading geometry-free slices are also removed from geometry.
+  const gapPayload = {
+    sessionId: 's1', pageIndex: 0, requestId: 1, revisionId: 'r1', sourceHash: 'a'.repeat(64),
+    canonicalText: 'AB',
+    spans: [{ sourceId: 'l0', startUtf16: 1, endUtf16: 2, text: 'B' }],
+    cssWidth: 450, cssHeight: 600,
+  };
+  const gapBuilt = layer.buildOcrDom(fakeDocument(), gapPayload, 450, 600);
+  assert.ok(gapBuilt);
+  const gapSpan = gapBuilt.layer.childNodes[0];
+  assert.equal(gapSpan.textContent, 'A');
+  assert.equal(gapSpan.style.display, 'none');
+  assert.equal(gapBuilt.textNodes[0].rect, undefined);
+});
+
+test('fit unions fragmented glyph rects and stays idempotent across font-ready re-fits', () => {
+  const layer = loadLayer();
+  const document = fakeDocument();
+  const payload = {
+    sessionId: 's1', pageIndex: 0, requestId: 1, revisionId: 'r1', sourceHash: 'a'.repeat(64),
+    canonicalText: 'あい',
+    spans: [
+      { sourceId: 'l0', startUtf16: 0, endUtf16: 2, text: 'あい',
+        quad: { x0: 0.1, y0: 0.1, x1: 0.9, y1: 0.1, x2: 0.9, y2: 0.2, x3: 0.1, y3: 0.2 } },
+    ],
+    cssWidth: 450, cssHeight: 600,
+  };
+  const built = layer.buildOcrDom(document, payload, 450, 600);
+  assert.ok(built);
+  const element = built.layer.childNodes[0];
+  const target = built.textNodes[0].rect;
+  assert.ok(target);
+  // Fragmented measurement (e.g. vertical glyphs split across client rects)
+  // must union to the full line box, not just the first fragment.
+  const fragments = [
+    { x: 10, y: 20, width: 30, height: 10, left: 10, top: 20, right: 40, bottom: 30 },
+    { x: 10, y: 30, width: 30, height: 10, left: 10, top: 30, right: 40, bottom: 40 },
+  ];
+  let transformWrites = 0;
+  let lastTransform = '';
+  const originalTransform = element.style.transform;
+  Object.defineProperty(element.style, 'transform', {
+    get() { return lastTransform; },
+    set(value) { transformWrites += 1; lastTransform = value; },
+    configurable: true,
+  });
+  element.getBoundingClientRect = () => ({ left: 10, top: 20, width: 30, height: 10, right: 40, bottom: 30 });
+  built.layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 450, height: 600, right: 450, bottom: 600 });
+  let rangeCalls = 0;
+  document.createRange = () => ({
+    selectNodeContents() { rangeCalls += 1; },
+    getClientRects: () => (rangeCalls === 1 ? fragments : [{ x: 10, y: 20, width: target.width, height: target.height, left: 10, top: 20, right: 10 + target.width, bottom: 20 + target.height }]),
+  });
+  layer.fitOcrDom(document, built);
+  assert.ok(transformWrites >= 1);
+  assert.match(lastTransform, /^matrix\(/);
+  // Second pass (fonts.ready) must clear first and re-fit, not compound.
+  const firstTransform = lastTransform;
+  // Simulate fitted glyphs now filling the target at the target origin.
+  document.createRange = () => ({
+    selectNodeContents() {},
+    getClientRects: () => [{ x: target.left, y: target.top, width: target.width, height: target.height, left: target.left, top: target.top, right: target.left + target.width, bottom: target.top + target.height }],
+  });
+  element.getBoundingClientRect = () => ({ left: target.left, top: target.top, width: target.width, height: target.height, right: target.left + target.width, bottom: target.top + target.height });
+  layer.fitOcrDom(document, built);
+  // Re-fit from the already-fitted box needs ~identity, not a compounded scale.
+  assert.match(lastTransform, /^matrix\(1[^,]*, 0, 0, 1[^,]*,/);
+  assert.ok(firstTransform.length > 0);
+  // Union was used: fragmented 30x20 box scaled to the 360x60 target.
+  assert.match(firstTransform, /^matrix\(12,/);
+});

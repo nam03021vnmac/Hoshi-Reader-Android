@@ -313,10 +313,14 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   localized error and a retry affordance when retryable, never only a
   transient Snackbar.
 - OCR selectable line text is fitted after attachment using measured DOM Range
-  bounds in page-local CSS coordinates. Estimated character pitch caps expanded
+  bounds in page-local CSS coordinates, unioning fragmented glyph rects and
+  re-fitting idempotently after font load. Estimated character pitch caps expanded
   detection-line thickness; recognition crops and stored OCR revisions stay
-  unchanged. Native selection, lookup rectangles, and inline saved highlights
+  unchanged. Geometry-free slices stay hidden so they never stack at the page
+  origin. Native selection, lookup rectangles, and inline saved highlights
   use the same fitted DOM, including during page zoom and pinch previews.
+  Scroll or zoom dismisses the lookup selection overlay instead of leaving
+  stale fixed rects misaligned.
 - Reader `bookinfo.json` sidecars persist whole-book/spine character counts plus
   optional iOS-compatible TOC fragment offsets and a first-appearance raster
   image inventory. A reader-facts schema version invalidates stale derived

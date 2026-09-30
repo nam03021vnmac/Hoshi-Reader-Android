@@ -20,7 +20,9 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
   and highlights, and the overlay tracks the displayed fit-width/zoom size so
   taps select the visible characters. Selection highlights fit recognized line
   lengths rather than expanded OCR crop sizes; adjacent saved selections remain
-  confined to their selected text. Tapping another word outside an open lookup
+  confined to their selected text. The selected lookup highlight keeps covering
+  the visible glyphs across font load and re-fits, and scrolling or zooming
+  dismisses it instead of leaving it misaligned. Tapping another word outside an open lookup
   popup, including on the same text line, starts a new lookup. Vertical OCR
   columns anchor the popup to the whole selection and open it to the side so it
   does not cover the selected text. Theme, Statistics

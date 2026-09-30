@@ -786,6 +786,16 @@ internal fun PdfReaderWebView(
             }
             is PdfReaderMessage.ZoomChanged -> {
                 zoomFactor = message.zoomFactor
+                // Zoom re-layout moves every glyph: a fixed overlay measured
+                // before the scale change would linger misaligned.
+                closeLookupPopupsAndSelection()
+            }
+            PdfReaderMessage.ViewportChanged -> {
+                // The selection overlay is fixed to the window while PDF text
+                // scrolls inside its viewport. Any scroll leaves previously
+                // measured rects stale, so close (EPUB continuous parity)
+                // instead of showing a drifting highlight.
+                closeLookupPopupsAndSelection()
             }
             is PdfReaderMessage.Outline -> {
                 pdfOutline = message.items
@@ -1492,6 +1502,7 @@ internal sealed interface PdfReaderMessage {
     data object Ready : PdfReaderMessage
     data class PageChanged(val pageIndex: Int, val pageCount: Int) : PdfReaderMessage
     data class ZoomChanged(val zoomFactor: Double) : PdfReaderMessage
+    data object ViewportChanged : PdfReaderMessage
     data class Outline(val items: List<PdfOutlineItem>) : PdfReaderMessage
     data class Tap(val x: Double, val y: Double) : PdfReaderMessage
     data class TextProbe(
@@ -1521,6 +1532,7 @@ internal sealed interface PdfReaderMessage {
                 "zoomChanged" -> ZoomChanged(
                     zoomFactor = payload["zoomFactor"]?.toString()?.toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null,
                 )
+                "viewportChanged" -> ViewportChanged
                 "outline" -> Outline(
                     items = payload["items"]?.let { element ->
                         runCatching { json.decodeFromJsonElement<List<PdfOutlineItem>>(element) }.getOrDefault(emptyList())

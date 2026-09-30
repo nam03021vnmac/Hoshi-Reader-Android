@@ -156,11 +156,20 @@
         if (gap) {
           if (gap === '\n') {
             const br = document.createElement('br');
+            br.style.display = 'none';
             layer.appendChild(br);
             // Never rely on <br> for an offset: record an explicit newline node.
+            // Keep it out of hit-testing/geometry; offsets still agree via textContent.
             const newlineHolder = document.createElement('span');
             newlineHolder.textContent = '\n';
             newlineHolder.setAttribute && newlineHolder.setAttribute('data-hoshi-ocr-newline', '1');
+            newlineHolder.style.position = 'absolute';
+            newlineHolder.style.left = '0px';
+            newlineHolder.style.top = '0px';
+            newlineHolder.style.width = '0px';
+            newlineHolder.style.height = '0px';
+            newlineHolder.style.overflow = 'hidden';
+            newlineHolder.style.display = 'none';
             layer.appendChild(newlineHolder);
             textNodes.push({ node: newlineHolder.firstChild, start: cursor, end: cursor + 1 });
           } else {
@@ -200,7 +209,17 @@
 
   function positionSpan(element, quad, width, height, text, direction) {
     if (!quad) {
+      // Geometry-free slices (gaps, newline holders) must not sit at the
+      // page origin where taps and selection rects would pick up a stray
+      // (0,0) box. Keep the text node for UTF-16 offsets but remove it from
+      // hit-testing and client-rect geometry.
       element.style.position = 'absolute';
+      element.style.left = '0px';
+      element.style.top = '0px';
+      element.style.width = '0px';
+      element.style.height = '0px';
+      element.style.overflow = 'hidden';
+      element.style.display = 'none';
       return;
     }
     const rect = quadBoundingRect(quad);
@@ -228,23 +247,57 @@
     return { left, top, width: isVertical ? fontSize : spanWidth, height: isVertical ? spanHeight : fontSize };
   }
 
+  function unionClientRects(rects) {
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    let hit = false;
+    for (const rect of rects) {
+      if (!rect) continue;
+      const x = rect.x !== undefined ? rect.x : rect.left;
+      const y = rect.y !== undefined ? rect.y : rect.top;
+      const width = rect.width !== undefined ? rect.width : rect.right - rect.left;
+      const height = rect.height !== undefined ? rect.height : rect.bottom - rect.top;
+      if (!isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(width) || !isFiniteNumber(height)) continue;
+      if (width <= 0 || height <= 0) continue;
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x + width);
+      bottom = Math.max(bottom, y + height);
+      hit = true;
+    }
+    if (!hit) return null;
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  }
+
   /**
    * Fit actual selectable glyph bounds only after the layer is attached.
    * Never throws: fitting only tightens selection geometry and must not
    * break page installation when measurement APIs are unavailable.
+   * Idempotent: clears previous transforms before measuring so a second
+   * pass after font load re-fits instead of compounding.
    */
   function fitOcrDom(document, built) {
     try {
       if (!document || typeof document.createRange !== 'function') return;
       if (!built || !built.layer || !Array.isArray(built.textNodes)) return;
       if (typeof built.layer.getBoundingClientRect !== 'function') return;
+    const fitted = built.textNodes.filter(part => part.rect);
+    // Clear previous fits first so re-fitting (e.g. after fonts.ready)
+    // measures unfitted glyphs instead of compounding transforms.
+    for (const part of fitted) {
+      const element = part.node && part.node.parentElement;
+      if (element && element.style) element.style.transform = '';
+    }
     const range = document.createRange();
     // Read all geometry before writing transforms to avoid a layout per line.
-    const measured = built.textNodes.filter(part => part.rect).map(part => {
+    const measured = fitted.map(part => {
       range.selectNodeContents(part.node);
-      const bounds = range.getClientRects()[0];
+      const bounds = unionClientRects(range.getClientRects());
       if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null;
       const element = part.node.parentElement;
+      if (!element || typeof element.getBoundingClientRect !== 'function') return null;
       return { element, target: part.rect, bounds, origin: element.getBoundingClientRect() };
     }).filter(Boolean);
     if (!measured.length) return;
