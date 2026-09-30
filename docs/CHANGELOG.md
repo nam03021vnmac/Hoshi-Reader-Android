@@ -20,8 +20,11 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
   and highlights, and the overlay tracks the displayed fit-width/zoom size so
   taps select the visible characters. Selection highlights fit recognized line
   lengths rather than expanded OCR crop sizes; adjacent saved selections remain
-  confined to their selected text. Theme, Statistics menu entries, book search, and Sasayaki audiobook
-  matching remain EPUB-only.
+  confined to their selected text. Tapping another word outside an open lookup
+  popup, including on the same text line, starts a new lookup. Vertical OCR
+  columns anchor the popup to the whole selection and open it to the side so it
+  does not cover the selected text. Theme, Statistics
+  menu entries, book search, and Sasayaki audiobook matching remain EPUB-only.
 - Add a Sasayaki setting that starts audiobook playback from the double-tapped reader line
   and keeps playing forward, without flashing a dictionary popup. While this setting is
   armed with an audiobook loaded, single-tap lookup waits briefly to confirm the tap is

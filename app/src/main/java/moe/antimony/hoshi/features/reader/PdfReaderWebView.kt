@@ -392,7 +392,7 @@ internal fun PdfReaderWebView(
             dictionaryStyles = dictionaryStyles,
             lookup = { text, maxResults, scanLength -> dictionaryRepository.lookup(text, maxResults, scanLength, dictionarySettings.lookupOptions()) },
             options = LookupPopupOptions(
-                isVertical = false,
+                isVertical = isVerticalPdfSelectionRect(selection.rect),
                 isFullWidth = false,
                 width = effectiveSettings.popupWidth,
                 height = effectiveSettings.popupHeight,
@@ -607,22 +607,27 @@ internal fun PdfReaderWebView(
             selectionRects(highlightCount) { rects ->
                 if (lookupPopups.none { it.id == popup.id }) return@selectionRects
                 val displayRects = rects.ifEmpty { listOf(popup.state.selection.rect) }
-                val anchor = displayRects.firstOrNull()
-                if (anchor != null) {
-                    setLookupPopups(
-                        lookupPopups.map { existing ->
-                            if (existing.id == popup.id) {
-                                existing.copy(
-                                    state = existing.state.copy(
-                                        selection = existing.state.selection.copy(rect = anchor),
-                                    ),
-                                )
-                            } else {
-                                existing
-                            }
-                        },
-                    )
-                }
+                // Vertical OCR lines return one rect per character stacked in Y.
+                // Anchoring to the first rect places a horizontal popup below the
+                // first character, covering the rest of the selection. Anchor to
+                // the union so the popup sits below/above the whole selection,
+                // or to the side when the union is vertical.
+                val anchor = pdfUnionSelectionRect(displayRects) ?: popup.state.selection.rect
+                val anchorIsVertical = isVerticalPdfSelectionRect(anchor)
+                setLookupPopups(
+                    lookupPopups.map { existing ->
+                        if (existing.id == popup.id) {
+                            existing.copy(
+                                state = existing.state.copy(
+                                    selection = existing.state.selection.copy(rect = anchor),
+                                    isVertical = anchorIsVertical,
+                                ),
+                            )
+                        } else {
+                            existing
+                        }
+                    },
+                )
                 rootSelectionHighlight = ReaderRootSelectionHighlight(
                     popupId = popup.id,
                     rects = displayRects,
@@ -789,7 +794,6 @@ internal fun PdfReaderWebView(
                 handlePdfTap(
                     x = message.x,
                     y = message.y,
-                    popups = themedLookupPopups,
                     scanLength = readerSelectionMaxLength(currentDictionarySettings.value),
                     webView = webView,
                     onBlankTap = ::handleReaderTapOutside,
@@ -1058,15 +1062,17 @@ internal fun PdfReaderWebView(
                 rootSelectionHighlight,
                 popupDarkMode,
                 effectiveSettings.eInkMode,
-                effectiveSettings.verticalWriting,
             ) {
                 rootSelectionHighlight?.let { highlight ->
+                    // PDF pages mix horizontal and vertical OCR lines, so infer
+                    // orientation from the selected rects instead of reader settings.
+                    val union = highlight.rects?.let(::pdfUnionSelectionRect)
                     ReaderLookupPopupRootHighlightPayload.fromReaderRects(
                         popupId = highlight.popupId,
                         rects = highlight.rects,
                         darkMode = popupDarkMode,
                         eInkMode = effectiveSettings.eInkMode,
-                        verticalWriting = effectiveSettings.verticalWriting,
+                        verticalWriting = union?.let(::isVerticalPdfSelectionRect) ?: false,
                     )
                 }
             }
@@ -1247,7 +1253,6 @@ internal fun PdfReaderWebView(
 private fun handlePdfTap(
     x: Double,
     y: Double,
-    popups: List<LookupPopupItem>,
     scanLength: Int,
     webView: HoshiPdfReaderWebView?,
     onBlankTap: () -> Unit,
@@ -1257,11 +1262,7 @@ private fun handlePdfTap(
     // Popup taps never reach the viewport touch listener: the popup layer is a
     // sibling of #hoshi-pdf-viewport appended to documentElement, so touches on
     // visible popup shells do not post Tap messages. Every Tap here is already
-    // outside the rendered popup stack, so no Kotlin frame blocking is needed.
-    // (EPUB needs it because its WebView-level touch listener sees all touches,
-    // but PDF uses the inner viewport div listener.) Previously a fixed huge
-    // viewport predicted below-only placement and incorrectly swallowed taps on
-    // other rows when the real popup was above.
+    // outside the popup stack and should proceed directly to text selection.
     currentWebView.evaluateJavascript(
         ReaderSelectionCommand.SelectText(
             x = x.toFloat(),
@@ -1428,6 +1429,32 @@ private fun pdfJumpToPageInvocation(pageIndex: Int): String =
 
 private fun clearPopupSelectionHighlightsForPdf(popups: List<LookupPopupItem>): List<LookupPopupItem> =
     popups.map { popup -> popup.copy(clearSelectionSignal = popup.clearSelectionSignal + 1) }
+
+internal fun pdfUnionSelectionRect(rects: List<ReaderSelectionRect>): ReaderSelectionRect? {
+    if (rects.isEmpty()) return null
+    var left = Double.MAX_VALUE
+    var top = Double.MAX_VALUE
+    var right = -Double.MAX_VALUE
+    var bottom = -Double.MAX_VALUE
+    for (rect in rects) {
+        if (!rect.width.isFinite() || !rect.height.isFinite()) continue
+        if (rect.width <= 0.0 || rect.height <= 0.0) continue
+        left = minOf(left, rect.x)
+        top = minOf(top, rect.y)
+        right = maxOf(right, rect.x + rect.width)
+        bottom = maxOf(bottom, rect.y + rect.height)
+    }
+    if (left > right || top > bottom) return null
+    return ReaderSelectionRect(x = left, y = top, width = right - left, height = bottom - top)
+}
+
+internal fun isVerticalPdfSelectionRect(rect: ReaderSelectionRect): Boolean {
+    if (!rect.width.isFinite() || !rect.height.isFinite()) return false
+    if (rect.width <= 0.0 || rect.height <= 0.0) return false
+    // Match the OCR span direction threshold (height > width * 1.8) so vertical
+    // columns use side placement instead of covering the selection from below.
+    return rect.height > rect.width * 1.8
+}
 
 @Serializable
 private data class PdfHighlightPayload(

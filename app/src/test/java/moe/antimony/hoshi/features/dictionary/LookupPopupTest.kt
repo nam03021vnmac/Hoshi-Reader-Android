@@ -10,6 +10,8 @@ import moe.antimony.hoshi.features.reader.ReaderLookupPopupFramePayload
 import moe.antimony.hoshi.features.reader.ReaderLookupPopupRootHighlightPayload
 import moe.antimony.hoshi.features.reader.ReaderLookupPopupStackPayload
 import moe.antimony.hoshi.features.reader.ReaderLookupPopupViewport
+import moe.antimony.hoshi.features.reader.isVerticalPdfSelectionRect
+import moe.antimony.hoshi.features.reader.pdfUnionSelectionRect
 import moe.antimony.hoshi.features.reader.readerLookupPopupIframeUrl
 import moe.antimony.hoshi.features.reader.readerLookupPopupTouchBlocksReaderGesture
 import moe.antimony.hoshi.features.audio.AudioSettings
@@ -553,6 +555,63 @@ class LookupPopupTest {
         )
 
         assertEquals(ContentLanguageProfile.Default, defaultPopup?.first?.state?.contentLanguageProfile)
+    }
+
+    @Test
+    fun pdfVerticalSelectionUnionAnchorsWholeColumn() {
+        val charRects = (0 until 5).map { index ->
+            ReaderSelectionRect(x = 200.0, y = 200.0 + index * 20.0, width = 20.0, height = 20.0)
+        }
+
+        val union = pdfUnionSelectionRect(charRects)
+
+        assertEquals(200.0, union?.x ?: 0.0, 0.0)
+        assertEquals(200.0, union?.y ?: 0.0, 0.0)
+        assertEquals(20.0, union?.width ?: 0.0, 0.0)
+        assertEquals(100.0, union?.height ?: 0.0, 0.0)
+        assertTrue(isVerticalPdfSelectionRect(union!!))
+        assertFalse(isVerticalPdfSelectionRect(charRects.first()))
+    }
+
+    @Test
+    fun pdfVerticalPopupUsesSidePlacementWithoutCoveringSelection() {
+        val charRects = (0 until 5).map { index ->
+            ReaderSelectionRect(x = 200.0, y = 200.0 + index * 20.0, width = 20.0, height = 20.0)
+        }
+        val union = pdfUnionSelectionRect(charRects)!!
+
+        val frame = LookupPopupLayout(
+            selectionRect = union,
+            screenWidth = 400.0,
+            screenHeight = 800.0,
+            maxWidth = 320.0,
+            maxHeight = 250.0,
+            isVertical = isVerticalPdfSelectionRect(union),
+        ).calculate()
+
+        val popupLeft = frame.centerX - frame.width / 2
+        val popupRight = frame.centerX + frame.width / 2
+        val popupTop = frame.centerY - frame.height / 2
+        val popupBottom = frame.centerY + frame.height / 2
+        val overlaps = popupLeft < union.x + union.width &&
+            popupRight > union.x &&
+            popupTop < union.y + union.height &&
+            popupBottom > union.y
+        assertFalse(overlaps)
+
+        // The previous first-rect anchor with horizontal placement covered the rest of the column.
+        val firstAnchorFrame = LookupPopupLayout(
+            selectionRect = charRects.first(),
+            screenWidth = 400.0,
+            screenHeight = 800.0,
+            maxWidth = 320.0,
+            maxHeight = 250.0,
+            isVertical = false,
+        ).calculate()
+        val firstTop = firstAnchorFrame.centerY - firstAnchorFrame.height / 2
+        val firstBottom = firstAnchorFrame.centerY + firstAnchorFrame.height / 2
+        assertTrue(firstTop < charRects.last().y + charRects.last().height)
+        assertTrue(firstBottom > charRects.last().y)
     }
 
     private fun lookupResult(
