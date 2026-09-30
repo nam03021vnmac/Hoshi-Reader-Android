@@ -32,6 +32,7 @@ internal fun PdfOcrStatusOverlay(
     onRetryHighRes: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    highDetailModifier: Modifier = Modifier,
 ) {
     when (pageState?.status) {
         PdfOcrPageStatus.Queued,
@@ -87,7 +88,7 @@ internal fun PdfOcrStatusOverlay(
                 Text(pageState.error.asString(), modifier = modifier, style = MaterialTheme.typography.labelLarge)
             } else if (!pageState.highResUsed && !pageState.revisionLocked &&
                 pageState.record?.qualityFlags?.contains("low-confidence") == true) {
-                TextButton(onClick = onRetryHighRes, modifier = modifier) {
+                TextButton(onClick = onRetryHighRes, modifier = highDetailModifier) {
                     Icon(Icons.Rounded.AutoFixHigh, contentDescription = null)
                 }
             }

@@ -1235,6 +1235,7 @@ internal fun PdfReaderWebView(
                 }
             },
             modifier = Modifier.align(Alignment.TopCenter).padding(top = topInfoPadding + 48.dp),
+            highDetailModifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp),
         )
         SnackbarHost(
             hostState = ocrSnackbarHostState,
