@@ -304,6 +304,61 @@ test('initial restore sizes every placeholder and renders only the nearby page w
   assert.ok(r.messages.some((message) => message.type === 'ready'));
 });
 
+function ocrPayload(pageIndex = 0, revisionId = 'old', requestId = 1, text = '猫') {
+  return {
+    sessionId: 'ocr-test', pageIndex, revisionId, requestId, sourceHash: 'a'.repeat(64),
+    canonicalText: text, cssWidth: 600, cssHeight: 800,
+    spans: [{ sourceId: 'line', startUtf16: 0, endUtf16: text.length, text, direction: 'HORIZONTAL',
+      quad: { x0: 0.1, y0: 0.1, x1: 0.8, y1: 0.1, x2: 0.8, y2: 0.2, x3: 0.1, y3: 0.2 } }],
+  };
+}
+
+test('OCR replacement waits for native selection and acknowledges the installed revision', async () => {
+  const r = reader({ texts: [] });
+  await r.api.open({ sessionId: 'ocr-test' });
+  await r.flush();
+  assert.equal(r.ocr.applyOcr(ocrPayload()), true);
+  const old = r.root.children[0].children.find(child => child.classList.contains('hoshi-pdf-ocr-layer'));
+  r.select(old.children[0]);
+  assert.equal(r.ocr.applyOcr(ocrPayload(0, 'new', 2, '犬')), true);
+  assert.equal(old.parentElement, r.root.children[0]);
+  assert.equal(r.messages.filter(m => m.type === 'ocrInstalled').at(-1).revisionId, 'old');
+  r.clearNativeSelection();
+  r.ocr.selectionCleared();
+  await r.flush();
+  assert.equal(old.parentElement, null);
+  assert.equal(r.messages.filter(m => m.type === 'ocrInstalled').at(-1).revisionId, 'new');
+});
+
+test('OCR lookup selection defers replacement and a saved highlight retains its original source', async () => {
+  const r = reader({ texts: [] });
+  await r.api.open({ sessionId: 'ocr-test' });
+  await r.flush();
+  r.ocr.applyOcr(ocrPayload());
+  const old = r.root.children[0].children.find(child => child.classList.contains('hoshi-pdf-ocr-layer'));
+  r.window.hoshiSelection.selection = { ranges: [{ node: old.children[0].children[0], start: 0, end: 1 }] };
+  r.ocr.applyOcr(ocrPayload(0, 'new', 2, '犬'));
+  assert.equal(old.parentElement, r.root.children[0]);
+  r.highlights.applyHighlights([{ id: 'saved', character: 0, offset: 0, text: '猫', color: 'yellow' }]);
+  r.window.hoshiSelection.clearSelection();
+  await r.flush();
+  assert.equal(old.parentElement, r.root.children[0]);
+  assert.equal(r.ocr.applyOcr(ocrPayload(0, 'another', 3, '犬')), false);
+});
+
+test('session updates replay nearby probes and offscreen OCR responses are rejected', async () => {
+  const r = reader({ count: 50, texts: [] });
+  await r.api.open({ pageIndex: 20 });
+  await r.flush();
+  r.api.setSessionId('ocr-test');
+  const probes = r.messages.filter(m => m.type === 'textProbe' && m.sessionId === 'ocr-test');
+  assert.ok(probes.some(m => m.pageIndex === 20));
+  const visible = r.messages.filter(m => m.type === 'ocrViewport' && m.sessionId === 'ocr-test').at(-1);
+  assert.ok(visible.firstVisible <= 20 && visible.lastVisible >= 20);
+  assert.equal(r.ocr.applyOcr(ocrPayload(0)), false);
+  assert.equal(r.ocr.applyOcr(ocrPayload(20)), true);
+});
+
 test('zoom keeps old pixels until the new scale swaps in, preserves page position, and caps raster memory', async () => {
   const r = reader();
   await r.api.open({ pageIndex: 6 });

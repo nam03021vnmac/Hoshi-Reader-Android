@@ -77,7 +77,17 @@ internal fun PdfOcrStatusOverlay(
             }
         }
         PdfOcrPageStatus.NoText -> {
-            // Illustrated/blank pages remain readable as images; no overlay.
+            // Blank/illustrated pages settle without a permanent overlay or retry loop.
+        }
+        PdfOcrPageStatus.OcrReady -> {
+            if (pageState.error != null) {
+                Text(pageState.error.asString(), modifier = modifier, style = MaterialTheme.typography.labelLarge)
+            } else if (!pageState.highResUsed && !pageState.revisionLocked &&
+                pageState.record?.qualityFlags?.contains("low-confidence") == true) {
+                TextButton(onClick = onRetryHighRes, modifier = modifier) {
+                    Text(stringResource(R.string.pdf_ocr_high_detail))
+                }
+            }
         }
         PdfOcrPageStatus.Failed -> {
             // Failed/Unavailable must stay visible: without this the page goes
@@ -101,6 +111,11 @@ internal fun PdfOcrStatusOverlay(
                     if (pageState.retryable) {
                         TextButton(onClick = onRetry) {
                             Text(stringResource(R.string.pdf_ocr_try_again))
+                        }
+                        if (!pageState.highResUsed && !pageState.revisionLocked) {
+                            TextButton(onClick = onRetryHighRes) {
+                                Text(stringResource(R.string.pdf_ocr_high_detail))
+                            }
                         }
                     }
                 }

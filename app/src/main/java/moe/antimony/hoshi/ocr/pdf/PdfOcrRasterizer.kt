@@ -13,7 +13,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.di.IoDispatcher
-import kotlin.math.sqrt
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 
 data class PdfOcrRasterInput(
     val bitmap: Bitmap,
@@ -42,7 +43,7 @@ class PdfOcrRasterizer @Inject constructor(
     ): PdfOcrRasterInput? = withContext(ioDispatcher) {
         if (!pdfFile.isFile || pageIndex < 0) return@withContext null
         rendererMutex.withLock {
-            runCatching {
+            try {
                 ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
                     PdfRenderer(descriptor).use { renderer ->
                         if (pageIndex >= renderer.pageCount) return@withContext null
@@ -50,24 +51,19 @@ class PdfOcrRasterizer @Inject constructor(
                             val nativeWidth = page.width
                             val nativeHeight = page.height
                             if (nativeWidth <= 0 || nativeHeight <= 0) return@withContext null
-                            val baseDpi = if (highRes) 300 else 200
-                            var scale = baseDpi / 72f
-                            // Cap at 3 megapixels per input bitmap (~12 MiB ARGB).
-                            val maxPixels = 3_000_000.0
-                            val rawPixels = nativeWidth * scale * nativeHeight * scale
-                            if (rawPixels > maxPixels) {
-                                scale *= sqrt(maxPixels / rawPixels).toFloat()
-                            }
-                            val width = (nativeWidth * scale).toInt().coerceAtLeast(1)
-                            val height = (nativeHeight * scale).toInt().coerceAtLeast(1)
-                            if (width <= 0 || height <= 0 || width * height.toLong() > 12_000_000L) {
-                                return@withContext null
-                            }
+                            val (width, height, scale) = PdfOcrRasterPlan.create(nativeWidth, nativeHeight, highRes)
+                            ensureActive()
                             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                             bitmap.eraseColor(Color.WHITE)
                             val matrix = Matrix().apply { setScale(scale, scale) }
-                            page.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                            val dpi = (72f * scale).toInt().coerceAtLeast(72)
+                            try {
+                                page.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                ensureActive()
+                            } catch (error: Throwable) {
+                                bitmap.recycle()
+                                throw error
+                            }
+                            val dpi = (72f * scale).toInt().coerceAtLeast(1)
                             PdfOcrRasterInput(
                                 bitmap = bitmap,
                                 nativeWidthPt = nativeWidth,
@@ -78,7 +74,11 @@ class PdfOcrRasterizer @Inject constructor(
                         }
                     }
                 }
-            }.getOrNull()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 

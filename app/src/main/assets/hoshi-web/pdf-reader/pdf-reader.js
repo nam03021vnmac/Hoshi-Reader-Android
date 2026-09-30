@@ -72,6 +72,8 @@ function pageRecord(index) {
       baseWidth: 0,
       baseHeight: 0,
       rendered: false,
+      embeddedProbe: null,
+      ocrPayload: null,
     };
     state.pages[index] = record;
   }
@@ -190,14 +192,31 @@ function visibleRange() {
 }
 
 function scheduleRender(first, last) {
+  const previousFirst = state.visibleFirst;
+  const previousLast = state.visibleLast;
   state.visibleFirst = first;
   state.visibleLast = last;
+  postMessage({ type: 'ocrViewport', sessionId: state.sessionId, firstVisible: first, lastVisible: last });
+  // Kotlin/disk owns long-lived results. Keep only the adjacent working set here.
+  for (const index of state.ocrByPage.keys()) {
+    if (index < first - 1 || index > last + 1) {
+      state.ocrByPage.delete(index);
+      state.ocrRequestByPage.delete(index);
+    }
+  }
   const low = Math.max(0, first - RENDER_MARGIN_PAGES);
   const high = Math.min(state.pageCount - 1, last + RENDER_MARGIN_PAGES);
   for (const index of state.activePages) {
     if (index < low || index > high) discardPage(index);
   }
-  for (let index = low; index <= high; index += 1) renderPage(index);
+  for (let index = low; index <= high; index += 1) {
+    const record = state.pages[index];
+    if (index >= first - 1 && index <= last + 1 &&
+        (index < previousFirst - 1 || index > previousLast + 1) && record?.rendered && record.embeddedProbe) {
+      postMessage({ ...record.embeddedProbe, sessionId: state.sessionId });
+    }
+    renderPage(index);
+  }
 }
 
 function renderPage(index) {
@@ -345,7 +364,7 @@ function probeEmbeddedText(record, extractionFailed) {
   try {
     const classifier = globalThis.hoshiPdfOcrLayer?.classifyEmbeddedText;
     const verdict = classifier ? classifier(record.pageText) : { textLength: (record.pageText || '').trim().length, hasSuspectChars: false, isSingleNumber: false };
-    postMessage({
+    record.embeddedProbe = {
       type: 'textProbe',
       sessionId: state.sessionId,
       pageIndex: record.index,
@@ -355,13 +374,15 @@ function probeEmbeddedText(record, extractionFailed) {
       extractionFailed: !!extractionFailed,
       cssWidth: record.baseWidth,
       cssHeight: record.baseHeight,
-    });
+    };
+    postMessage(record.embeddedProbe);
   } catch {
     // Probing never breaks rendering.
   }
 }
 
 function installOcrPayload(record, payload, viewport) {
+  const installStarted = globalThis.performance?.now?.();
   const layerApi = globalThis.hoshiPdfOcrLayer;
   if (!layerApi || !record.div) return false;
   const baseWidth = record.baseWidth > 0 ? record.baseWidth : payload.cssWidth;
@@ -388,7 +409,12 @@ function installOcrPayload(record, payload, viewport) {
   record.pageText = built.pageText;
   record.textSource = 'ocr';
   record.ocrRevisionId = payload.revisionId;
+  record.ocrPayload = payload;
   applyHighlightsToPage(record);
+  postMessage({ type: 'ocrInstalled', sessionId: state.sessionId, pageIndex: record.index, revisionId: payload.revisionId });
+  if (Number.isFinite(installStarted)) {
+    console.debug(`PdfOcr timing page=${record.index} domMs=${(performance.now() - installStarted).toFixed(1)}`);
+  }
   return true;
 }
 
@@ -406,6 +432,7 @@ function discardPage(index) {
   record.pageText = '';
   record.textSource = 'embedded';
   record.ocrRevisionId = null;
+  record.ocrPayload = null;
   if (record.textLayerDiv) {
     record.textLayerDiv.remove();
     record.textLayerDiv = null;
@@ -802,7 +829,41 @@ async function reportOutline() {
 
 // --- Public API ---------------------------------------------------------------
 
+function ocrSelectionTouchesPage(record) {
+  const belongs = node => node?.parentElement?.closest?.('.hoshi-pdf-page') === record.div;
+  const native = window.getSelection();
+  if (native && native.rangeCount > 0 && !native.isCollapsed) {
+    const range = native.getRangeAt(0);
+    if (belongs(range.startContainer) || belongs(range.endContainer)) return true;
+  }
+  return state.preparedSelection?.pageIndex === record.index ||
+    (window.hoshiSelection?.selection?.ranges || []).some(part => belongs(part.node));
+}
+
+function pageHasHighlights(index) {
+  for (const highlight of state.highlightIndex.values()) {
+    if (highlight.pageIndex === index) return true;
+  }
+  return false;
+}
+
+function flushPendingOcr() {
+  for (const index of state.activePages) {
+    const record = state.pages[index];
+    const payload = state.ocrByPage.get(index);
+    if (!record?.rendered || !payload || payload.revisionId === record.ocrRevisionId || ocrSelectionTouchesPage(record)) continue;
+    if (record.ocrRevisionId && pageHasHighlights(index)) {
+      state.ocrByPage.set(index, record.ocrPayload);
+      continue;
+    }
+    installOcrPayload(record, payload, { scale: currentCssScale() });
+  }
+}
+
+document.addEventListener('selectionchange', () => requestAnimationFrame(flushPendingOcr));
+
 window.hoshiPdfOcr = {
+  selectionCleared() { requestAnimationFrame(flushPendingOcr); },
   applyOcr(payload) {
     const layerApi = globalThis.hoshiPdfOcrLayer;
     if (!layerApi || !payload || typeof payload !== 'object') return false;
@@ -810,6 +871,7 @@ window.hoshiPdfOcr = {
     const valid = layerApi.validateOcrPayload(payload);
     if (!valid) return false;
     if (!Number.isSafeInteger(valid.pageIndex) || valid.pageIndex < 0 || valid.pageIndex >= state.pageCount) return false;
+    if (state.visibleFirst >= 0 && (valid.pageIndex < state.visibleFirst - 1 || valid.pageIndex > state.visibleLast + 1)) return false;
     // Revision-aware installation: ignore stale deliveries for a rendered page.
     const record = state.pages[valid.pageIndex];
     const latestRequest = state.ocrRequestByPage.get(valid.pageIndex);
@@ -820,6 +882,15 @@ window.hoshiPdfOcr = {
       // Discarded pages keep the cached payload and install it on next render.
       return true;
     }
+    if (record.ocrRevisionId && record.ocrRevisionId !== valid.revisionId && pageHasHighlights(record.index)) {
+      state.ocrByPage.set(record.index, record.ocrPayload);
+      return false;
+    }
+    if (record.ocrRevisionId !== valid.revisionId && ocrSelectionTouchesPage(record)) {
+      // Keep source offsets stable during native selection, lookup, and the color picker.
+      return true;
+    }
+    if (record.ocrRevisionId === valid.revisionId) return true;
     const viewportScale = currentCssScale();
     const fakeViewport = { scale: viewportScale };
     return installOcrPayload(record, valid, fakeViewport);
@@ -902,6 +973,13 @@ window.hoshiPdfReader = {
     state.sessionId = sessionId;
     state.ocrByPage = new Map();
     state.ocrRequestByPage = new Map();
+    if (state.visibleFirst >= 0) {
+      postMessage({ type: 'ocrViewport', sessionId, firstVisible: state.visibleFirst, lastVisible: state.visibleLast });
+      for (const index of state.activePages) {
+        const probe = state.pages[index]?.embeddedProbe;
+        if (probe) postMessage({ ...probe, sessionId });
+      }
+    }
   },
   setBackground(color) {
     document.documentElement.style.setProperty('--hoshi-background-color', color || '#ffffff');

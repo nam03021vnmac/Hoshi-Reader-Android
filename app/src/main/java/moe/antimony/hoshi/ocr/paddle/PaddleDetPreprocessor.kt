@@ -22,6 +22,7 @@ object PaddleDetPreprocessor {
 
     const val LIMIT_SIDE_LEN = 64
     const val MAX_SIDE_LIMIT = 4000
+    const val MAX_INPUT_PIXELS = 3_000_000
 
     fun preprocess(bitmap: Bitmap): DetNetworkInput {
         val originalW = bitmap.width
@@ -52,6 +53,12 @@ object PaddleDetPreprocessor {
             ratio = MAX_SIDE_LIMIT.toDouble() / maxOf(newH, newW)
             newH = (newH * ratio).toInt()
             newW = (newW * ratio).toInt()
+        }
+        // High-detail retries retain source detail for crops without doubling detector work.
+        if (newH.toLong() * newW > MAX_INPUT_PIXELS) {
+            val pixelRatio = kotlin.math.sqrt(MAX_INPUT_PIXELS.toDouble() / (newH.toDouble() * newW))
+            newH = (newH * pixelRatio).toInt()
+            newW = (newW * pixelRatio).toInt()
         }
         newH = maxOf(roundHalfToEven(newH / 32.0) * 32, 32)
         newW = maxOf(roundHalfToEven(newW / 32.0) * 32, 32)

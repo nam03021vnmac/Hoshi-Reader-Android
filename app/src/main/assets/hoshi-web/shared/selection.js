@@ -912,6 +912,7 @@ window.hoshiSelection = {
         window.getSelection()?.removeAllRanges();
         CSS.highlights?.get('hoshi-selection')?.clear();
         this.selection = null;
+        window.hoshiPdfOcr?.selectionCleared?.();
     }
 };
 

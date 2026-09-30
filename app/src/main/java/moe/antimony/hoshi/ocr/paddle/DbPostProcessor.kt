@@ -81,7 +81,8 @@ object DbPostProcessor {
         thresh: Float,
     ): List<Component> {
         val labels = IntArray(w * h)
-        val parent = mutableListOf(0)
+        // At most one label per pixel. No boxed neighbours/roots per foreground pixel.
+        var parent = IntArray(minOf(1024, w * h + 1))
         fun find(a: Int): Int {
             var r = a
             while (parent[r] != r) r = parent[r]
@@ -97,33 +98,32 @@ object DbPostProcessor {
         for (y in 0 until h) {
             for (x in 0 until w) {
                 if (prob[y * w + x] <= thresh) continue
-                val neighbours = mutableListOf<Int>()
-                if (x > 0 && labels[y * w + x - 1] != 0) neighbours += labels[y * w + x - 1]
-                if (y > 0) {
-                    if (x > 0 && labels[(y - 1) * w + x - 1] != 0) neighbours += labels[(y - 1) * w + x - 1]
-                    if (labels[(y - 1) * w + x] != 0) neighbours += labels[(y - 1) * w + x]
-                    if (x + 1 < w && labels[(y - 1) * w + x + 1] != 0) neighbours += labels[(y - 1) * w + x + 1]
-                }
-                if (neighbours.isEmpty()) {
-                    parent += nextLabel
+                val left = if (x > 0) labels[y * w + x - 1] else 0
+                val upLeft = if (y > 0 && x > 0) labels[(y - 1) * w + x - 1] else 0
+                val up = if (y > 0) labels[(y - 1) * w + x] else 0
+                val upRight = if (y > 0 && x + 1 < w) labels[(y - 1) * w + x + 1] else 0
+                var root = if (left == 0) 0 else find(left)
+                if (upLeft != 0) root = unionLabels(parent, root, find(upLeft))
+                if (up != 0) root = unionLabels(parent, root, find(up))
+                if (upRight != 0) root = unionLabels(parent, root, find(upRight))
+                if (root == 0) {
+                    if (nextLabel == parent.size) parent = parent.copyOf(minOf(parent.size * 2, w * h + 1))
+                    parent[nextLabel] = nextLabel
                     labels[y * w + x] = nextLabel
                     nextLabel += 1
                 } else {
-                    val roots = neighbours.map { find(it) }
-                    val min = roots.min()
-                    labels[y * w + x] = min
-                    for (root in roots) parent[root] = min
+                    labels[y * w + x] = root
                 }
             }
         }
-        val counts = mutableMapOf<Int, Int>()
+        val counts = IntArray(nextLabel)
         for (y in 0 until h) {
             for (x in 0 until w) {
                 val label = labels[y * w + x]
                 if (label == 0) continue
                 val root = find(label)
                 labels[y * w + x] = root
-                counts[root] = (counts[root] ?: 0) + 1
+                counts[root]++
             }
         }
         fun isBackground(x: Int, y: Int): Boolean {
@@ -142,9 +142,16 @@ object DbPostProcessor {
                 }
             }
         }
-        return counts.map { (label, count) ->
-            Component(count, boundaries[label].orEmpty())
+        return (1 until nextLabel).filter { counts[it] > 0 }.map { label ->
+            Component(counts[label], boundaries[label].orEmpty())
         }
+    }
+
+    private fun unionLabels(parent: IntArray, a: Int, b: Int): Int {
+        if (a == 0) return b
+        val smaller = minOf(a, b)
+        parent[maxOf(a, b)] = smaller
+        return smaller
     }
 
     /**

@@ -7,17 +7,21 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.di.IoDispatcher
 import moe.antimony.hoshi.epub.BookWorkRegistry
 import moe.antimony.hoshi.ocr.OcrEngine
 import moe.antimony.hoshi.ocr.OcrRecognizeOutcome
+import moe.antimony.hoshi.ocr.OcrTimings
 import moe.antimony.hoshi.ocr.layout.JapaneseOcrPostprocessor
 import moe.antimony.hoshi.ocr.layout.PostprocessorInputLine
 import moe.antimony.hoshi.ocr.pdf.NormalizedQuad
@@ -45,10 +49,10 @@ class PdfOcrRepository @Inject constructor(
     private val store: PdfOcrStore,
     private val workRegistry: BookWorkRegistry,
     @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher,
-) {
+) : PdfOcrReaderRepository {
     private val enginePermits = Semaphore(1)
     private val jobsMutex = Mutex()
-    private val inFlight = mutableMapOf<String, Job>()
+    private val inFlight = mutableMapOf<String, Deferred<PdfOcrResult>>()
     private val hashCache = mutableMapOf<String, CachedHash>()
     private val coordinatorMutex = Mutex()
     private val coordinators = mutableMapOf<File, AutoCloseable>()
@@ -62,7 +66,7 @@ class PdfOcrRepository @Inject constructor(
     fun configHash(highRes: Boolean): String =
         PdfOcrPipeline.configHash(engine.engineId, engine.engineVersion, highRes)
 
-    suspend fun sourceHashFor(pdfFile: File): String? = withContext(ioDispatcher) {
+    override suspend fun sourceHashFor(pdfFile: File): String? = withContext(ioDispatcher) {
         if (!pdfFile.isFile) return@withContext null
         val key = pdfFile.absolutePath
         val length = pdfFile.length()
@@ -78,10 +82,15 @@ class PdfOcrRepository @Inject constructor(
         hash
     }
 
-    suspend fun cachedPage(sourceHash: String, pageIndex: Int): OcrPageRecord? =
-        store.loadActive(sourceHash, pipelineKey(), pageIndex)
+    override suspend fun cachedPage(sourceHash: String, pageIndex: Int): OcrPageRecord? =
+        store.pinnedPage(sourceHash, pageIndex) ?: store.loadActive(sourceHash, pipelineKey(), pageIndex)?.takeIf {
+            it.pipelineVersion == PdfOcrPipeline.VERSION && it.engineId == engine.engineId &&
+                it.engineVersion == engine.engineVersion && it.configHash == configHash(it.rasterPlan.highRes)
+        }
 
-    suspend fun ocrPage(
+    override suspend fun hasPinnedPage(sourceHash: String, pageIndex: Int): Boolean = store.hasPinnedPage(sourceHash, pageIndex)
+
+    override suspend fun ocrPage(
         pdfFile: File,
         bookRoot: File?,
         sourceHash: String,
@@ -89,22 +98,62 @@ class PdfOcrRepository @Inject constructor(
         cssWidth: Double,
         cssHeight: Double,
         highRes: Boolean,
+        force: Boolean,
+        onStage: (PdfOcrStage) -> Unit,
+    ): PdfOcrResult = coroutineScope {
+        val requestKey = "$sourceHash|$pageIndex"
+        var owner = false
+        val request = jobsMutex.withLock {
+            inFlight[requestKey] ?: async(start = CoroutineStart.LAZY) {
+                runPage(pdfFile, bookRoot, sourceHash, pageIndex, cssWidth, cssHeight, highRes, force, onStage)
+            }.also {
+                inFlight[requestKey] = it
+                owner = true
+            }
+        }
+        try {
+            request.await()
+        } finally {
+            if (owner) withContext(NonCancellable) {
+                // Native calls may finish after await observes cancellation. Keep them registered
+                // until cleanup/recycling completes so deletion can still join the request.
+                request.join()
+                jobsMutex.withLock { if (inFlight[requestKey] === request) inFlight.remove(requestKey) }
+            }
+        }
+    }
+
+    private suspend fun runPage(
+        pdfFile: File,
+        bookRoot: File?,
+        sourceHash: String,
+        pageIndex: Int,
+        cssWidth: Double,
+        cssHeight: Double,
+        highRes: Boolean,
+        force: Boolean,
+        onStage: (PdfOcrStage) -> Unit,
     ): PdfOcrResult = withContext(ioDispatcher) {
+        val timings = OcrTimings()
         ensureActive()
         synchronized(deletedSources) { if (sourceHash in deletedSources) throw CancellationException() }
-        // Reuse persisted results on reopen without rerunning inference.
-        cachedPage(sourceHash, pageIndex)?.let { cached ->
-            if (cached.status == "NoText") return@withContext PdfOcrResult.NoText(cached)
-            return@withContext PdfOcrResult.Ready(cached)
+        ensureCoordinator(bookRoot, sourceHash)
+        // A page with saved anchors keeps its pinned text, even after a pipeline upgrade.
+        val pinned = timings.measure("pinRead") { store.pinnedPage(sourceHash, pageIndex) }
+        if (pinned != null) return@withContext resultFor(pinned)
+        if (store.hasPinnedPage(sourceHash, pageIndex)) {
+            return@withContext PdfOcrResult.Unavailable("Pinned OCR revision unavailable")
+        }
+        if (!force) timings.measure("cache") { cachedPage(sourceHash, pageIndex) }?.let { cached ->
+            if (!highRes || cached.rasterPlan.highRes) return@withContext resultFor(cached)
         }
         ensureActive()
-        // One pending request per (source, page, configuration).
-        val requestKey = "$sourceHash|$pageIndex|highRes=$highRes"
-        jobsMutex.withLock { if (requestKey in inFlight) return@withContext PdfOcrResult.Failed("Duplicate OCR request", retryable = true) }
-
-        ensureCoordinator(bookRoot)
-
-        val raster = rasterizer.rasterize(pdfFile, pageIndex, highRes)
+        // Bound the entire bitmap lifetime, including raster and postprocessing.
+        timings.measure("queue") { enginePermits.acquire() }
+        try {
+        ensureActive()
+        onStage(PdfOcrStage.Rasterizing)
+        val raster = timings.measure("raster") { rasterizer.rasterize(pdfFile, pageIndex, highRes) }
             ?: run {
                 Log.w(PdfOcrTag, "rasterize failed page=$pageIndex highRes=$highRes")
                 return@withContext PdfOcrResult.Failed("Could not render PDF page", retryable = true)
@@ -122,7 +171,8 @@ class PdfOcrRepository @Inject constructor(
                 )
                 return@withContext PdfOcrResult.Unavailable("Unsupported PDF page geometry")
             }
-            val outcome = enginePermits.withPermit {
+            onStage(PdfOcrStage.Recognizing)
+            val outcome = timings.measure("engine") {
                 ensureActive()
                 engine.recognize(raster.bitmap)
             }
@@ -158,7 +208,10 @@ class PdfOcrRepository @Inject constructor(
                             },
                         )
                     }
-                    val processed = postprocessor.process(inputs)
+                    onStage(PdfOcrStage.Postprocessing)
+                    val processed = timings.measure("layout") {
+                        postprocessor.process(inputs, outcome.result.imageWidth.toDouble(), outcome.result.imageHeight.toDouble())
+                    }
                     val revisionId = UUID.randomUUID().toString()
                     val record = OcrPageRecord(
                         sourceSha256 = sourceHash,
@@ -170,8 +223,8 @@ class PdfOcrRepository @Inject constructor(
                         pageGeometry = OcrPageGeometryRecord(
                             nativeWidthPt = raster.nativeWidthPt,
                             nativeHeightPt = raster.nativeHeightPt,
-                            cssWidth = cssWidth,
-                            cssHeight = cssHeight,
+                            cssWidth = cssWidth.takeIf { it.isFinite() && it > 0 } ?: raster.nativeWidthPt * (96.0 / 72.0),
+                            cssHeight = cssHeight.takeIf { it.isFinite() && it > 0 } ?: raster.nativeHeightPt * (96.0 / 72.0),
                         ),
                         rasterPlan = OcrRasterPlanRecord(
                             dpi = raster.dpi,
@@ -192,22 +245,31 @@ class PdfOcrRepository @Inject constructor(
                     synchronized(deletedSources) {
                         if (sourceHash in deletedSources) throw CancellationException()
                     }
-                    val saved = store.save(record, pipelineKey())
-                    if (!saved) return@withContext PdfOcrResult.Failed("Could not save OCR result", retryable = true)
-                    store.evictUnpinnedIfOverQuota()
+                    val saved = timings.measure("save") { store.save(record, pipelineKey()) }
+                    if (!saved) return@withContext store.pinnedPage(sourceHash, pageIndex)?.let(::resultFor)
+                        ?: PdfOcrResult.Failed("Could not save OCR result", retryable = true)
+                    store.scheduleEviction()
                     if (record.status == "NoText") PdfOcrResult.NoText(record) else PdfOcrResult.Ready(record)
                 }
             }
         } finally {
             runCatching { raster.bitmap.recycle() }
         }
+        } finally {
+            enginePermits.release()
+            Log.d(PdfOcrTag, "timing page=$pageIndex highRes=$highRes ${timings.summary()}")
+        }
     }
 
+    private fun resultFor(record: OcrPageRecord): PdfOcrResult =
+        if (record.status == "NoText") PdfOcrResult.NoText(record) else PdfOcrResult.Ready(record)
+
     suspend fun cancelForSource(sourceHash: String) {
-        jobsMutex.withLock {
-            inFlight.entries.removeAll { it.key.startsWith("$sourceHash|") }
+        val requests = jobsMutex.withLock {
+            inFlight.filterKeys { it.startsWith("$sourceHash|") }.values.toList()
         }
-        synchronized(deletedSources) { /* jobs check deletion flag cooperatively */ }
+        requests.forEach { it.cancel() }
+        requests.forEach { it.join() }
     }
 
     suspend fun deleteForSource(bookRoot: File?, sourceHash: String) {
@@ -226,28 +288,28 @@ class PdfOcrRepository @Inject constructor(
         }
     }
 
-    suspend fun pinHighlightForRevision(
+    override suspend fun pinHighlightForRevision(
         highlightId: String,
         sourceHash: String,
         pageIndex: Int,
         revisionId: String,
-    ) {
-        store.pinHighlight(OcrHighlightPinRecord(highlightId, sourceHash, pageIndex, revisionId))
-    }
+    ): Boolean = store.pinHighlight(OcrHighlightPinRecord(highlightId, sourceHash, pageIndex, revisionId))
 
-    suspend fun unpinHighlight(sourceHash: String, highlightId: String) {
+    override suspend fun unpinHighlight(sourceHash: String, highlightId: String) {
         store.unpinHighlight(sourceHash, highlightId)
     }
 
-    private suspend fun ensureCoordinator(bookRoot: File?) {
+    private suspend fun ensureCoordinator(bookRoot: File?, sourceHash: String) {
         if (bookRoot == null) return
         coordinatorMutex.withLock {
             if (bookRoot in coordinators) return
-            val registration = runCatching {
+            val registration = try {
                 workRegistry.register(bookRoot) {
-                    // Deletion cancels jobs; late writes check the deletion flag.
+                    deleteForSource(bookRoot, sourceHash)
                 }
-            }.getOrNull() ?: return
+            } catch (_: IllegalStateException) {
+                throw CancellationException("Book is unavailable")
+            }
             coordinators[bookRoot] = registration
         }
     }
@@ -282,3 +344,5 @@ class PdfOcrRepository @Inject constructor(
         ).takeIf { it.isFiniteAndBounded() }
     }
 }
+
+enum class PdfOcrStage { Rasterizing, Recognizing, Postprocessing }

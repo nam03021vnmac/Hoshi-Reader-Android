@@ -131,6 +131,29 @@ Check first entry and expanded book lists as well as the warm three-card case.
   consume CPU without reducing elapsed time. Verify PCM/token/timestamp parity,
   bounded read-ahead, and decoder cleanup on pause or failure after optimization.
 
+## PDF OCR
+
+- Measure the complete visible-page request to installed selectable layer, not
+  inference alone. `PdfOcr` timing logs report queue, raster, engine, layout and
+  save stages; `PaddleOcr` reports initialization, source-pixel extraction,
+  detection preprocessing/inference/postprocessing, crop preparation,
+  recognition preprocessing/inference and decoding. WebView logs `PdfOcr`
+  DOM installation time. Logs contain dimensions and timings, not source text.
+- Separate cold model load, warm uncached pages, cached pages, normal raster and
+  opt-in high-detail retries. Normal raster is capped at 3 MP; high-detail source
+  raster at 6 MP while detector input remains bounded near 3 MP. Record effective
+  dimensions/DPI rather than assuming a requested DPI was rendered.
+- `PaddleOcrBenchmarkTest` is an opt-in generated-Japanese fixture benchmark with
+  configurable thread counts, batch sizes, and optional XNNPACK. It checks batch
+  text/order parity and reports cold/warm timings and code-point edit counts.
+  Synthetic fixtures and emulator results are engineering checks, not evidence
+  for printed-book CER or real-device product latency. Use book-separated labeled
+  scans for those acceptance claims, retaining punctuation and separate ruby truth.
+- Benchmark batches 1/2/4 and CPU threads 1/2/4 before changing production defaults.
+  Large CTC outputs must remain bounded; do not use input tensor size alone as
+  the batch memory budget. XNNPACK owns its own threads; the ORT intra-op pool
+  uses one thread in that configuration to avoid competing pools.
+
 ## Repeated-Entry Slowdowns
 
 For bugs that get worse after leaving and re-entering Reader, measure resource

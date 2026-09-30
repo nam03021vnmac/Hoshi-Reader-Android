@@ -134,6 +134,7 @@ internal fun PdfReaderWebView(
     val ankiUiState by ankiViewModel.uiState.collectAsStateWithLifecycle()
     val ocrViewModel: PdfOcrViewModel = hiltViewModel()
     val ocrUiState by ocrViewModel.uiState.collectAsStateWithLifecycle()
+    var installedOcrRevisions by remember { mutableStateOf(mapOf<Int, String>()) }
     val ocrSnackbarHostState = remember { SnackbarHostState() }
     val ocrFailedText = stringResource(R.string.pdf_ocr_failed)
     val ocrTryAgainText = stringResource(R.string.pdf_ocr_try_again)
@@ -677,7 +678,7 @@ internal fun PdfReaderWebView(
                 // crash cannot leave a committed highlight without its source.
                 val ocrRecord = ocrUiState.pages[result.start]?.record
                 if (ocrRecord != null) {
-                    ocrViewModel.pinForHighlight(id, result.start) {
+                    ocrViewModel.pinForHighlight(id, result.start, installedOcrRevisions[result.start]) {
                         persistHighlights(highlights.orEmpty() + highlight)
                     }
                 } else {
@@ -752,7 +753,6 @@ internal fun PdfReaderWebView(
             is PdfReaderMessage.PageChanged -> {
                 if (message.pageCount > 0) pageCount = message.pageCount
                 val nextIndex = message.pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
-                ocrViewModel.onViewportChanged((nextIndex - 1).coerceAtLeast(0), (nextIndex + 1).coerceAtMost((pageCount - 1).coerceAtLeast(0)))
                 if (nextIndex != pageIndex) {
                     closeLookupPopupsAndSelection()
                     enterFocusMode()
@@ -784,6 +784,17 @@ internal fun PdfReaderWebView(
                     )
                 }
             }
+            is PdfReaderMessage.OcrViewport -> {
+                if (message.sessionId == currentOcrSessionId.value) {
+                    ocrViewModel.onViewportChanged(message.firstVisible, message.lastVisible)
+                    installedOcrRevisions = installedOcrRevisions.filterKeys { it >= message.firstVisible - 1 && it <= message.lastVisible + 1 }
+                }
+            }
+            is PdfReaderMessage.OcrInstalled -> {
+                if (message.sessionId == currentOcrSessionId.value) {
+                    installedOcrRevisions = installedOcrRevisions + (message.pageIndex to message.revisionId)
+                }
+            }
             is PdfReaderMessage.ZoomChanged -> {
                 zoomFactor = message.zoomFactor
             }
@@ -809,6 +820,7 @@ internal fun PdfReaderWebView(
     var deliveredOcrRevisions by remember { mutableStateOf(mapOf<Int, String>()) }
     LaunchedEffect(ocrUiState.sessionId) {
         deliveredOcrRevisions = emptyMap()
+        installedOcrRevisions = emptyMap()
     }
     // attachBook rotates the session when the book changes; if the reader page
     // already opened with the previous id, probes would be dropped as stale.
@@ -826,6 +838,7 @@ internal fun PdfReaderWebView(
         val view = webView ?: return@LaunchedEffect
         val sessionId = ocrUiState.sessionId
         val sourceHash = ocrUiState.sourceHash ?: return@LaunchedEffect
+        deliveredOcrRevisions = deliveredOcrRevisions.filterKeys { it in ocrUiState.pages }
         for ((pageIndex, pageState) in ocrUiState.pages) {
             if (pageState.status != PdfOcrPageStatus.OcrReady) continue
             val record = pageState.record ?: continue
@@ -845,6 +858,7 @@ internal fun PdfReaderWebView(
                         startUtf16 = span.startUtf16,
                         endUtf16 = span.endUtf16,
                         text = slice,
+                        direction = span.direction,
                         quad = span.quad?.let { quad ->
                             PdfOcrQuadPayload(quad.x0, quad.y0, quad.x1, quad.y1, quad.x2, quad.y2, quad.x3, quad.y3)
                         },
@@ -1385,6 +1399,7 @@ private data class PdfOcrSpanPayload(
     val endUtf16: Int,
     val text: String,
     val quad: PdfOcrQuadPayload? = null,
+    val direction: String = "UNKNOWN",
 )
 
 @Serializable
@@ -1494,6 +1509,8 @@ internal sealed interface PdfReaderMessage {
     data class ZoomChanged(val zoomFactor: Double) : PdfReaderMessage
     data class Outline(val items: List<PdfOutlineItem>) : PdfReaderMessage
     data class Tap(val x: Double, val y: Double) : PdfReaderMessage
+    data class OcrViewport(val sessionId: String, val firstVisible: Int, val lastVisible: Int) : PdfReaderMessage
+    data class OcrInstalled(val sessionId: String, val pageIndex: Int, val revisionId: String) : PdfReaderMessage
     data class TextProbe(
         val sessionId: String,
         val pageIndex: Int,
@@ -1539,6 +1556,16 @@ internal sealed interface PdfReaderMessage {
                     extractionFailed = payload["extractionFailed"]?.toString() == "true",
                     cssWidth = payload["cssWidth"]?.toString()?.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 } ?: 0.0,
                     cssHeight = payload["cssHeight"]?.toString()?.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 } ?: 0.0,
+                )
+                "ocrViewport" -> OcrViewport(
+                    sessionId = payload["sessionId"]?.toString()?.trim('"').orEmpty(),
+                    firstVisible = payload["firstVisible"]?.toString()?.toIntOrNull()?.takeIf { it >= 0 } ?: return null,
+                    lastVisible = payload["lastVisible"]?.toString()?.toIntOrNull()?.takeIf { it >= 0 } ?: return null,
+                )
+                "ocrInstalled" -> OcrInstalled(
+                    sessionId = payload["sessionId"]?.toString()?.trim('"').orEmpty(),
+                    pageIndex = payload["pageIndex"]?.toString()?.toIntOrNull()?.takeIf { it >= 0 } ?: return null,
+                    revisionId = payload["revisionId"]?.toString()?.trim('"')?.takeIf { it.isNotBlank() } ?: return null,
                 )
                 "loadFailed" -> LoadFailed
                 else -> null

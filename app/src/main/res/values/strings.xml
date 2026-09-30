@@ -50,6 +50,7 @@
     <string name="pdf_ocr_run">Run OCR</string>
     <string name="pdf_ocr_try_again">Try again</string>
     <string name="pdf_ocr_keep_text">Keep text</string>
+    <string name="pdf_ocr_high_detail">Retry with more detail</string>
     <string name="import_select_srt_subtitle">Select a .srt subtitle file.</string>
     <string name="import_select_audiobook">Select a .mp3, .m4b, .m4a, or .opus audiobook file.</string>
     <string name="import_select_audio_database">Select a .db audio database file.</string>

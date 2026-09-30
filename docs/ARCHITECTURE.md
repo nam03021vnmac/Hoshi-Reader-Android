@@ -297,15 +297,36 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   as the page count.
 - Scanned PDF pages without usable embedded text use on-device OCR behind the
   same PDF reader. Kotlin owns raster (`PdfRenderer` at ~200 DPI capped at 3 MP,
-  300 DPI bounded retry), bundled PP-OCRv6_small Japanese recognition on
+  opt-in 300 DPI retry capped at 6 MP, while detector input stays bounded near
+  3 MP), bundled PP-OCRv6_small Japanese recognition on
   ONNX Runtime (detection plus CTC recognition from build-time pinned
   official weights, no OpenCV), deterministic
   Japanese layout/ruby postprocessing, and a versioned store under
   `noBackupFilesDir/pdf-ocr/<source-sha256>/`. The entry-scoped
-  `PdfOcrViewModel` queues missing-text pages automatically, keeps suspect text
+  `PdfOcrViewModel` queues missing-text pages automatically through a single
+  visible-first worker with one-page adjacent prefetch. The repository deduplicates
+  page requests and holds its execution permit across the complete raster bitmap
+  lifetime; book deletion cancels and joins its registered work before deleting
+  derived results. Cache reads are page-local, the store has an eight-page LRU,
+  and Kotlin/WebView delivery retains the nearby working set rather than eagerly
+  loading the book. It keeps suspect text
   embedded until an explicit Run OCR override, and installs one atomic OCR text
   layer per page (`pdf-ocr-layer.js`) satisfying the existing page-index/UTF-16
-  highlight contract. OCR revisions are pinned before highlight sidecar writes;
+  highlight contract. Recognition extracts the source pixel plane once, reuses
+  it for detection and crops, and supports memory-bounded width-bucketed batches;
+  production retains batch size one and four CPU threads pending device benchmarks.
+  Recognition decodes directly from the live ORT output buffer rather than
+  copying the full CTC output. Layout distances use physical page pixels;
+  horizontal prose is grouped within conservatively detected full-height gutters
+  before paragraph ordering. Span writing direction comes from
+  recognition rather than an independent WebView guess. Ruby candidates retain
+  body text but carry resolved base ranges. Explicit retries bypass unpinned cache
+  records; pipeline v2 invalidates older unpinned results. OCR revisions are pinned
+  before highlight sidecar writes, with the installed WebView revision acknowledged
+  back to Kotlin. Pinned pages replay their original revision across pipeline
+  upgrades and cannot be overwritten by retries. New layers wait while native
+  or lookup selection is active. Quota maintenance is throttled off the page-ready
+  path and preserves pinned revisions;
   zoom never invalidates OCR. The Kotlin session id is the authority: when it
   rotates after the reader page already opened, push it via
   `hoshiPdfReader.setSessionId` so later probes are not dropped as stale.

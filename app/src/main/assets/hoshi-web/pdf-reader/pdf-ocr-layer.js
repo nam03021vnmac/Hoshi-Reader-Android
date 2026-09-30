@@ -105,6 +105,8 @@
   }
 
   function spanDirection(span, cssWidth, cssHeight) {
+    if (span.direction === 'VERTICAL') return 'vertical';
+    if (span.direction === 'HORIZONTAL') return 'horizontal';
     if (!span.quad) return 'horizontal';
     const rect = quadBoundingRect(span.quad);
     // Page-pixel comparison: normalized axes have different physical scales

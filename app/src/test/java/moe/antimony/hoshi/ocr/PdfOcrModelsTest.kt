@@ -73,6 +73,6 @@ class PdfOcrModelsTest {
 
     @Test
     fun pipelineKeyIsStable() {
-        assertEquals("pdf-ocr-v1-paddle-ppocrv6-small-20260618", PdfOcrPipeline.pipelineKey("paddle-ppocrv6-small", "20260618"))
+        assertEquals("pdf-ocr-v2-paddle-ppocrv6-small-20260618", PdfOcrPipeline.pipelineKey("paddle-ppocrv6-small", "20260618"))
     }
 }

@@ -5,6 +5,16 @@ import org.junit.Test
 
 class PdfContentsSheetTest {
     @Test
+    fun ocrViewportAndInstallationMessagesCarrySessionAndRevisionIdentity() {
+        assertEquals(PdfReaderMessage.OcrViewport("session", 4, 5), PdfReaderMessage.fromJson(
+            """{"type":"ocrViewport","sessionId":"session","firstVisible":4,"lastVisible":5}""",
+        ))
+        assertEquals(PdfReaderMessage.OcrInstalled("session", 4, "revision"), PdfReaderMessage.fromJson(
+            """{"type":"ocrInstalled","sessionId":"session","pageIndex":4,"revisionId":"revision"}""",
+        ))
+        assertEquals(null, PdfReaderMessage.fromJson("""{"type":"ocrInstalled","pageIndex":-1,"revisionId":"revision"}"""))
+    }
+    @Test
     fun outlineRowsFlattenWithDepthAndPromoteUntitledChildren() {
         val rows = pdfOutlineRows(
             listOf(

@@ -19,6 +19,7 @@ import moe.antimony.hoshi.ocr.OcrPixelQuad
 import moe.antimony.hoshi.ocr.OcrRawLine
 import moe.antimony.hoshi.ocr.OcrRawResult
 import moe.antimony.hoshi.ocr.OcrRecognizeOutcome
+import moe.antimony.hoshi.ocr.OcrTimings
 import kotlin.coroutines.coroutineContext
 import kotlin.math.hypot
 import kotlin.math.max
@@ -39,6 +40,7 @@ private const val PaddleOcrTag = "PaddleOcr"
 class PaddleOcrEngine @Inject constructor(
     @param:ApplicationContext private val context: Context,
     @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+    private val configuration: PaddleOcrConfiguration = PaddleOcrConfiguration(),
 ) : OcrEngine {
     override val engineId: String = "paddle-ppocrv6-small"
     override val engineVersion: String = "20260618"
@@ -56,8 +58,9 @@ class PaddleOcrEngine @Inject constructor(
     )
 
     override suspend fun recognize(bitmap: Bitmap): OcrRecognizeOutcome = withContext(ioDispatcher) {
+        val timings = OcrTimings()
         val holder = try {
-            ensureSessions()
+            timings.measure("init") { ensureSessions() }
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
             Log.w(PaddleOcrTag, "model init failed: ${error.message}")
@@ -65,24 +68,27 @@ class PaddleOcrEngine @Inject constructor(
         } ?: return@withContext OcrRecognizeOutcome.Unavailable("OCR model unavailable")
         try {
             coroutineContext.ensureActive()
-            val detInput = PaddleDetPreprocessor.preprocess(bitmap)
-            coroutineContext.ensureActive()
-            val (prob, probShape) = mutex.withLock {
-                runSession(holder, det = true, detInput.tensor, longArrayOf(1, 3, detInput.height.toLong(), detInput.width.toLong()))
+            val sourceBgr = timings.measure("pixels") { bitmapToBgr(bitmap) }
+            val detInput = timings.measure("detPre") {
+                PaddleDetPreprocessor.preprocessBgr(sourceBgr, bitmap.width, bitmap.height)
             }
+            coroutineContext.ensureActive()
+            val (prob, probShape) = timings.measure("detInference") { mutex.withLock {
+                runSession(holder, det = true, detInput.tensor, longArrayOf(1, 3, detInput.height.toLong(), detInput.width.toLong()))
+            } }
             val mapH = probShape.getOrNull(2)?.toInt() ?: 0
             val mapW = probShape.getOrNull(3)?.toInt() ?: 0
             if (mapH <= 0 || mapW <= 0 || prob.size != mapH * mapW) {
                 return@withContext OcrRecognizeOutcome.Failure("Unexpected OCR output", retryable = true)
             }
             coroutineContext.ensureActive()
-            val boxes = DbPostProcessor.process(
+            val boxes = timings.measure("detPost") { DbPostProcessor.process(
                 prob = prob,
                 mapWidth = mapW,
                 mapHeight = mapH,
                 originalWidth = detInput.originalWidth,
                 originalHeight = detInput.originalHeight,
-            )
+            ) }
             if (boxes.isEmpty()) {
                 return@withContext OcrRecognizeOutcome.Success(
                     OcrRawResult(emptyList(), bitmap.width, bitmap.height),
@@ -91,36 +97,52 @@ class PaddleOcrEngine @Inject constructor(
             val chars = characters
                 ?: return@withContext OcrRecognizeOutcome.Unavailable("OCR model unavailable")
             val ordered = sortBoxesReadingOrder(boxes)
-            val sourceBgr = bitmapToBgr(bitmap)
             val lines = mutableListOf<OcrRawLine>()
-            for ((index, box) in ordered.withIndex()) {
-                coroutineContext.ensureActive()
-                val crop = cropLine(sourceBgr, bitmap.width, bitmap.height, box)
-                    ?: continue
-                val batch = PaddleRecPreprocessor.preprocessBatch(listOf(crop.first))
-                val (logits, logitShape) = mutex.withLock {
-                    runSession(holder, det = false, batch.tensor, longArrayOf(1, 3, 48, batch.width.toLong()))
-                }
-                val steps = logitShape.getOrNull(1)?.toInt() ?: 0
-                val classes = logitShape.getOrNull(2)?.toInt() ?: 0
-                if (steps <= 0 || classes <= 0 || logits.size != steps * classes) {
-                    return@withContext OcrRecognizeOutcome.Failure("Unexpected OCR output", retryable = true)
-                }
-                val (text, confidence) = CtcDecoder.decode(logits, 1, steps, classes, chars).first()
-                if (text.isBlank()) continue
-                lines += OcrRawLine(
-                    id = "paddle-l$index",
-                    text = text,
-                    quad = box.points.toPixelQuad(),
-                    direction = if (crop.second) OcrDirection.VERTICAL else OcrDirection.HORIZONTAL,
-                    confidence = confidence.takeIf { it.isFinite() && it >= 0f },
-                )
+            val widths = ordered.map { box ->
+                val p = orderQuadPoints(box.points)
+                val w = max(hypot(p[0].x - p[1].x, p[0].y - p[1].y), hypot(p[2].x - p[3].x, p[2].y - p[3].y)).toInt().coerceAtLeast(1)
+                val h = max(hypot(p[0].x - p[3].x, p[0].y - p[3].y), hypot(p[1].x - p[2].x, p[1].y - p[2].y)).toInt().coerceAtLeast(1)
+                if (h.toDouble() / w >= 1.5) PaddleRecPreprocessor.normalizedWidth(h, w)
+                else PaddleRecPreprocessor.normalizedWidth(w, h)
             }
-            OcrRecognizeOutcome.Success(OcrRawResult(lines, bitmap.width, bitmap.height))
+            for (indices in recognitionBatches(widths, configuration.recognitionBatchSize, chars.size + 1)) {
+                coroutineContext.ensureActive()
+                val crops = timings.measure("crop") { indices.mapNotNull { index ->
+                    cropLine(sourceBgr, bitmap.width, bitmap.height, ordered[index])?.let { index to it }
+                } }
+                if (crops.isEmpty()) continue
+                val batch = timings.measure("recPre") { PaddleRecPreprocessor.preprocessBatch(crops.map { it.second.first }) }
+                val decoded = mutex.withLock {
+                    withSessionOutput(holder, det = false, batch.tensor,
+                        longArrayOf(batch.batch.toLong(), 3, 48, batch.width.toLong()), timings) { logits, shape ->
+                        val steps = shape.getOrNull(1)?.toInt() ?: 0
+                        val classes = shape.getOrNull(2)?.toInt() ?: 0
+                        require(shape.getOrNull(0)?.toInt() == batch.batch && steps > 0 && classes == chars.size + 1 &&
+                            logits.remaining().toLong() == batch.batch.toLong() * steps * classes) { "Unexpected OCR output" }
+                        timings.measure("decode") { CtcDecoder.decode(logits, batch.batch, steps, classes, chars) }
+                    }
+                }
+                for ((batchIndex, entry) in crops.withIndex()) {
+                    val (index, crop) = entry
+                    val box = ordered[index]
+                    val (text, confidence) = decoded[batchIndex]
+                    if (text.isBlank()) continue
+                    lines += OcrRawLine(
+                        id = "paddle-l$index",
+                        text = text,
+                        quad = box.points.toPixelQuad(),
+                        direction = if (crop.second) OcrDirection.VERTICAL else OcrDirection.HORIZONTAL,
+                        confidence = confidence.takeIf { it.isFinite() && it >= 0f },
+                    )
+                }
+            }
+            OcrRecognizeOutcome.Success(OcrRawResult(lines.sortedBy { it.id.removePrefix("paddle-l").toInt() }, bitmap.width, bitmap.height))
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
             Log.w(PaddleOcrTag, "recognize failed: ${error.message}")
             OcrRecognizeOutcome.Failure(error.message?.ifBlank { null } ?: "OCR failed", retryable = true)
+        } finally {
+            Log.d(PaddleOcrTag, "timing width=${bitmap.width} height=${bitmap.height} threads=${configuration.threads} batch=${configuration.recognitionBatchSize} xnnpack=${configuration.useXnnpack} ${timings.summary()}")
         }
     }
 
@@ -144,7 +166,10 @@ class PaddleOcrEngine @Inject constructor(
         try {
             val options = ai.onnxruntime.OrtSession.SessionOptions().apply {
                 setOptimizationLevel(ai.onnxruntime.OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                setIntraOpNumThreads(4)
+                setIntraOpNumThreads(if (configuration.useXnnpack) 1 else configuration.threads)
+                if (configuration.useXnnpack) {
+                    addXnnpack(mapOf("intra_op_num_threads" to configuration.threads.toString()))
+                }
             }
             try {
                 val det = env.createSession(detBytes, options)
@@ -182,21 +207,34 @@ class PaddleOcrEngine @Inject constructor(
         det: Boolean,
         data: FloatArray,
         shape: LongArray,
-    ): Pair<FloatArray, LongArray> {
+    ): Pair<FloatArray, LongArray> = withSessionOutput(holder, det, data, shape) { buffer, outputShape ->
+        val array = FloatArray(buffer.remaining())
+        buffer.get(array)
+        array to outputShape
+    }
+
+    private fun <T> withSessionOutput(
+        holder: OrtSessions,
+        det: Boolean,
+        data: FloatArray,
+        shape: LongArray,
+        timings: OcrTimings? = null,
+        consume: (FloatBuffer, LongArray) -> T,
+    ): T {
         val session = if (det) holder.det else holder.rec
         val inputName = if (det) holder.detInputName else holder.recInputName
         val tensor = ai.onnxruntime.OnnxTensor.createTensor(holder.env, FloatBuffer.wrap(data), shape)
         try {
-            session.run(mapOf(inputName to tensor)).use { result ->
+            val result = if (timings == null) session.run(mapOf(inputName to tensor)) else
+                timings.measure("recInference") { session.run(mapOf(inputName to tensor)) }
+            result.use {
                 val outputName = session.outputNames.iterator().next()
                 val output = result.get(outputName).orElseThrow { IllegalStateException("No OCR output tensor") }
                     as? ai.onnxruntime.OnnxTensor
                     ?: throw IllegalStateException("OCR output is not a tensor")
                 val buffer = output.floatBuffer.duplicate()
                 buffer.rewind()
-                val array = FloatArray(buffer.remaining())
-                buffer.get(array)
-                return Pair(array, output.info.shape)
+                return consume(buffer, output.info.shape)
             }
         } finally {
             tensor.close()

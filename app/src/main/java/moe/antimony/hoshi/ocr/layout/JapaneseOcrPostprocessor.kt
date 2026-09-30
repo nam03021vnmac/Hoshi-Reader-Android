@@ -19,6 +19,8 @@ data class PostprocessorInputLine(
     val direction: String,
     val confidence: Float?,
     val symbols: List<OcrSymbolRecord> = emptyList(),
+    val pageWidth: Float = 1f,
+    val pageHeight: Float = 1f,
 )
 
 data class PostprocessedOcrPage(
@@ -45,7 +47,8 @@ data class PostprocessedOcrPage(
  */
 @Singleton
 class JapaneseOcrPostprocessor @Inject constructor() {
-    fun process(lines: List<PostprocessorInputLine>): PostprocessedOcrPage {
+    fun process(lines: List<PostprocessorInputLine>, pageWidth: Double = 1.0, pageHeight: Double = 1.0): PostprocessedOcrPage {
+        require(pageWidth.isFinite() && pageHeight.isFinite() && pageWidth > 0 && pageHeight > 0)
         val valid = lines.mapNotNull { line ->
             val text = line.text
             if (text.isEmpty()) return@mapNotNull null
@@ -80,7 +83,10 @@ class JapaneseOcrPostprocessor @Inject constructor() {
             )
         }
 
-        val oriented = valid.map { it.copy(direction = resolveDirection(it)) }
+        val oriented = valid.map {
+            val metricLine = it.copy(pageWidth = pageWidth.toFloat(), pageHeight = pageHeight.toFloat())
+            metricLine.copy(direction = resolveDirection(metricLine))
+        }
         val deduplicated = deduplicate(oriented)
         val ruby = associateRuby(deduplicated)
         val paragraphs = groupParagraphs(deduplicated)
@@ -115,6 +121,7 @@ class JapaneseOcrPostprocessor @Inject constructor() {
                     endUtf16 = spanEnd,
                     quad = line.quad,
                     geometryPrecision = if (line.symbols.isNotEmpty()) "observed" else "line-estimate",
+                    direction = line.direction,
                 )
             }
             val paragraphEnd = canonical.length
@@ -139,7 +146,10 @@ class JapaneseOcrPostprocessor @Inject constructor() {
             canonicalText = canonical.toString(),
             paragraphs = paragraphRecords,
             spans = spans,
-            rubyAssociations = ruby,
+            rubyAssociations = ruby.mapNotNull { candidate ->
+                val base = spans.firstOrNull { it.sourceId == candidate.parentId } ?: return@mapNotNull null
+                OcrRubyAssociationRecord(listOf(candidate.readingId), base.startUtf16, base.endUtf16, 0.4f)
+            },
             sourceBoundaryMap = boundaries,
             qualityFlags = flags,
             rawObservations = rawObservations,
@@ -148,8 +158,7 @@ class JapaneseOcrPostprocessor @Inject constructor() {
 
     private fun resolveDirection(line: PostprocessorInputLine): String {
         if (line.direction == "HORIZONTAL" || line.direction == "VERTICAL") return line.direction
-        val quad = line.quad ?: return "UNKNOWN"
-        val rect = quad.boundingRect()
+        val rect = line.layoutRect() ?: return "UNKNOWN"
         val width = rect[2] - rect[0]
         val height = rect[3] - rect[1]
         if (width <= 0f || height <= 0f) return "UNKNOWN"
@@ -194,14 +203,15 @@ class JapaneseOcrPostprocessor @Inject constructor() {
         return inter / smaller > 0.8f
     }
 
-    private fun associateRuby(lines: List<PostprocessorInputLine>): List<OcrRubyAssociationRecord> {
+    private data class RubyCandidate(val readingId: String, val parentId: String)
+
+    private fun associateRuby(lines: List<PostprocessorInputLine>): List<RubyCandidate> {
         // Small kana near larger kanji, right-of-vertical / above-horizontal.
         // Ambiguous small kana are retained as body text; associations only annotate.
-        val associations = mutableListOf<OcrRubyAssociationRecord>()
-        val byId = lines.associateBy { it.id }
+        val associations = mutableListOf<RubyCandidate>()
         for (candidate in lines) {
             if (!candidate.text.isAllKana()) continue
-            val candidateRect = candidate.quad?.boundingRect() ?: continue
+            val candidateRect = candidate.layoutRect() ?: continue
             val candidateHeight = candidateRect[3] - candidateRect[1]
             val candidateWidth = candidateRect[2] - candidateRect[0]
             val candidateSize = min(candidateHeight, candidateWidth)
@@ -209,7 +219,7 @@ class JapaneseOcrPostprocessor @Inject constructor() {
             for (parent in lines) {
                 if (parent.id == candidate.id) continue
                 if (!parent.text.any { it.isKanji() }) continue
-                val parentRect = parent.quad?.boundingRect() ?: continue
+                val parentRect = parent.layoutRect() ?: continue
                 val parentHeight = parentRect[3] - parentRect[1]
                 val parentWidth = parentRect[2] - parentRect[0]
                 val parentCharSize = if (parent.direction == "VERTICAL") {
@@ -227,21 +237,13 @@ class JapaneseOcrPostprocessor @Inject constructor() {
                     candidateRect[3] <= parentRect[1] + parentCharSize * 0.25f &&
                     candidateRect[3] >= parentRect[1] - parentCharSize * 1.2f &&
                     overlaps(candidateRect[0], candidateRect[2], parentRect[0], parentRect[2])
-                if (isRightOfVertical || isAboveHorizontal) {
-                    associations += OcrRubyAssociationRecord(
-                        readingSourceIds = listOf(candidate.id),
-                        baseStartUtf16 = -1,
-                        baseEndUtf16 = -1,
-                        confidence = 0.4f,
-                    )
-                    // Resolve base range later after canonical offsets exist; keep marker only.
+                if (candidate.direction == parent.direction && (isRightOfVertical || isAboveHorizontal)) {
+                    associations += RubyCandidate(candidate.id, parent.id)
                     break
                 }
             }
         }
-        // Base ranges are filled by the caller after canonical construction; v1 keeps
-        // ruby in the base stream so unresolved ranges use -1 and never shift offsets.
-        return associations.filter { byId.containsKey(it.readingSourceIds.firstOrNull()) }
+        return associations
     }
 
     private fun overlaps(a0: Float, a1: Float, b0: Float, b1: Float): Boolean =
@@ -250,15 +252,20 @@ class JapaneseOcrPostprocessor @Inject constructor() {
     private fun groupParagraphs(lines: List<PostprocessorInputLine>): List<List<PostprocessorInputLine>> {
         if (lines.isEmpty()) return emptyList()
         val horizontal = lines.filter { it.direction != "VERTICAL" }.sortedWith(
-            compareBy({ it.quad?.boundingRect()?.get(1) ?: 0f }, { it.quad?.boundingRect()?.get(0) ?: 0f }, { it.id }),
+            compareBy({ it.layoutRect()?.get(1) ?: 0f }, { it.layoutRect()?.get(0) ?: 0f }, { it.id }),
         )
         val vertical = lines.filter { it.direction == "VERTICAL" }.sortedWith(
-            compareByDescending<PostprocessorInputLine> { it.quad?.boundingRect()?.get(0) ?: 0f }
-                .thenBy { it.quad?.boundingRect()?.get(1) ?: 0f }
+            compareByDescending<PostprocessorInputLine> { it.layoutRect()?.get(0) ?: 0f }
+                .thenBy { it.layoutRect()?.get(1) ?: 0f }
                 .thenBy { it.id },
         )
         val groups = mutableListOf<List<PostprocessorInputLine>>()
-        groups += groupOriented(horizontal, vertical = false)
+        // A genuine full-height gutter separates prose columns before line grouping.
+        // Spanning headings prevent this conservative split rather than forcing a guess.
+        val horizontalRegions = gutterRegions(horizontal) { it.layoutRect() }
+        for (region in horizontalRegions) {
+            groups += groupOriented(region.sortedWith(compareBy({ it.layoutRect()?.get(1) ?: 0f }, { it.id })), vertical = false)
+        }
         groups += groupOriented(vertical, vertical = true)
         return groups.filter { it.isNotEmpty() }
     }
@@ -289,8 +296,8 @@ class JapaneseOcrPostprocessor @Inject constructor() {
         line: PostprocessorInputLine,
         vertical: Boolean,
     ): Boolean {
-        val prevRect = previous.quad?.boundingRect()
-        val rect = line.quad?.boundingRect()
+        val prevRect = previous.layoutRect()
+        val rect = line.layoutRect()
         if (prevRect == null || rect == null) {
             // Without geometry, only join when clearly continuing prose.
             return false
@@ -324,7 +331,8 @@ class JapaneseOcrPostprocessor @Inject constructor() {
         val verticalCount = allLines.count { it.direction == "VERTICAL" }
         val horizontalCount = allLines.size - verticalCount
         val verticalDominant = verticalCount > horizontalCount
-        return groups.sortedWith { a, b ->
+        val regions = if (verticalDominant) listOf(groups) else gutterRegions(groups) { boundsOf(it) }
+        return regions.flatMap { region -> region.sortedWith { a, b ->
             val ra = boundsOf(a)
             val rb = boundsOf(b)
             val cmp = if (verticalDominant) {
@@ -333,10 +341,33 @@ class JapaneseOcrPostprocessor @Inject constructor() {
                 if (right != 0) right else ra[1].compareTo(rb[1])
             } else {
                 val top = ra[1].compareTo(rb[1])
-                if (top != 0) top else rb[2].compareTo(ra[2])
+                if (top != 0) top else ra[0].compareTo(rb[0])
             }
             if (cmp != 0) cmp else a.first().id.compareTo(b.first().id)
+        } }
+    }
+
+    /** Interval sweep, O(n log n); no all-pairs region/line comparison. */
+    private fun <T> gutterRegions(items: List<T>, rectFor: (T) -> FloatArray?): List<List<T>> {
+        if (items.size < 2) return listOf(items)
+        val measured = items.map { it to rectFor(it) }
+        if (measured.any { it.second == null }) return listOf(items)
+        val sorted = measured.sortedBy { it.second!![0] }
+        val regions = mutableListOf<MutableList<T>>()
+        var right = -Float.MAX_VALUE
+        var region: MutableList<T>? = null
+        for ((item, rect) in sorted) {
+            val bounds = rect!!
+            if (region == null || bounds[0] > right) {
+                region = mutableListOf()
+                regions += region
+                right = bounds[2]
+            } else {
+                right = max(right, bounds[2])
+            }
+            region += item
         }
+        return regions
     }
 
     private fun boundsOf(group: List<PostprocessorInputLine>): FloatArray {
@@ -345,7 +376,7 @@ class JapaneseOcrPostprocessor @Inject constructor() {
         var right = -Float.MAX_VALUE
         var bottom = -Float.MAX_VALUE
         for (line in group) {
-            val rect = line.quad?.boundingRect() ?: continue
+            val rect = line.layoutRect() ?: continue
             left = min(left, rect[0])
             top = min(top, rect[1])
             right = max(right, rect[2])
@@ -366,6 +397,10 @@ class JapaneseOcrPostprocessor @Inject constructor() {
         // Keep punctuation adjacency tight; paragraph breaks already carry '\n'.
         if (prev.isCjkOrKana() || next.isCjkOrKana()) return ""
         return " "
+    }
+
+    private fun PostprocessorInputLine.layoutRect(): FloatArray? = quad?.boundingRect()?.let { rect ->
+        floatArrayOf(rect[0] * pageWidth, rect[1] * pageHeight, rect[2] * pageWidth, rect[3] * pageHeight)
     }
 
     private fun Char.isCjk(): Boolean =

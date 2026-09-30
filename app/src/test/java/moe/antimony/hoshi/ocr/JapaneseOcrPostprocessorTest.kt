@@ -8,6 +8,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JapaneseOcrPostprocessorTest {
+    @Test fun horizontalColumnsReadEachColumnInsteadOfInterleavingRowsAcrossTheGutter() {
+        val lines = listOf(
+            PostprocessorInputLine("a1", "左上", quad(0.1f, 0.1f, 0.4f, 0.15f), "HORIZONTAL", 0.9f),
+            PostprocessorInputLine("b1", "右上", quad(0.6f, 0.1f, 0.9f, 0.15f), "HORIZONTAL", 0.9f),
+            PostprocessorInputLine("a2", "左下", quad(0.1f, 0.18f, 0.4f, 0.23f), "HORIZONTAL", 0.9f),
+            PostprocessorInputLine("b2", "右下", quad(0.6f, 0.18f, 0.9f, 0.23f), "HORIZONTAL", 0.9f),
+        )
+        val result = processor.process(lines.reversed(), 600.0, 900.0)
+        assertEquals("左上左下\n右上右下", result.canonicalText)
+        assertEquals(result.canonicalText, processor.process(lines, 600.0, 900.0).canonicalText)
+    }
+    @Test fun directionUsesPhysicalPageGeometryRatherThanNormalizedAxisLengths() {
+        val line = PostprocessorInputLine("l", "漢字", quad(0.1f, 0.1f, 0.2f, 0.25f), "UNKNOWN", 0.9f)
+        val result = processor.process(listOf(line), pageWidth = 2000.0, pageHeight = 500.0)
+        assertEquals("HORIZONTAL", result.spans.single().direction)
+        assertEquals(line.quad, result.spans.single().quad)
+    }
+
+    @Test fun rubyCandidatesHaveValidBaseRangesWithoutDeletingAmbiguousBodyText() {
+        val parent = PostprocessorInputLine("base", "漢字", quad(0.3f, 0.3f, 0.6f, 0.4f), "HORIZONTAL", 0.9f)
+        val reading = PostprocessorInputLine("ruby", "かんじ", quad(0.3f, 0.26f, 0.6f, 0.29f), "HORIZONTAL", 0.9f)
+        val result = processor.process(listOf(reading, parent), 600.0, 900.0)
+        val association = result.rubyAssociations.single()
+        assertEquals("漢字", result.canonicalText.substring(association.baseStartUtf16, association.baseEndUtf16))
+        assertTrue(result.canonicalText.contains("かんじ"))
+    }
     private val processor = JapaneseOcrPostprocessor()
 
     private fun quad(left: Float, top: Float, right: Float, bottom: Float) =

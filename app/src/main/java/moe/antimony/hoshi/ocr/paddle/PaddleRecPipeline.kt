@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.ocr.paddle
 
+import java.nio.FloatBuffer
 import kotlin.math.ceil
 
 /** BGR text-line crop in source-image pixels. */
@@ -26,21 +27,17 @@ object PaddleRecPreprocessor {
     const val FIXED_HEIGHT = 48
     const val MAX_IMG_WIDTH = 3200
 
+    fun normalizedWidth(width: Int, height: Int): Int =
+        ceil(FIXED_HEIGHT * width.toDouble() / height.coerceAtLeast(1)).toInt().coerceIn(1, MAX_IMG_WIDTH)
+
     fun preprocessBatch(crops: List<RecCrop>): RecNetworkInput {
         require(crops.isNotEmpty())
         val resized = crops.map { crop ->
-            val rgb = ByteArray(crop.bgr.size)
-            for (i in 0 until crop.width * crop.height) {
-                rgb[i * 3] = crop.bgr[i * 3 + 2]
-                rgb[i * 3 + 1] = crop.bgr[i * 3 + 1]
-                rgb[i * 3 + 2] = crop.bgr[i * 3]
-            }
-            val aspect = if (crop.height > 0) crop.width.toDouble() / crop.height else 1.0
-            val newW = ceil(FIXED_HEIGHT * aspect).toInt().coerceIn(1, MAX_IMG_WIDTH)
+            val newW = normalizedWidth(crop.width, crop.height)
             val scaled = if (newW == crop.width && FIXED_HEIGHT == crop.height) {
-                rgb
+                crop.bgr
             } else {
-                resizeBgrBilinear(rgb, crop.width, crop.height, newW, FIXED_HEIGHT)
+                resizeBgrBilinear(crop.bgr, crop.width, crop.height, newW, FIXED_HEIGHT)
             }
             Pair(scaled, newW)
         }
@@ -55,7 +52,7 @@ object PaddleRecPreprocessor {
                 for (y in 0 until FIXED_HEIGHT) {
                     for (x in 0 until maxW) {
                         val value = if (x < w) {
-                            (bytes[(y * w + x) * 3 + c].toInt() and 0xFF) / 127.5 - 1.0
+                            (bytes[(y * w + x) * 3 + (2 - c)].toInt() and 0xFF) / 127.5 - 1.0
                         } else {
                             0.0
                         }
@@ -82,7 +79,18 @@ object CtcDecoder {
         numClasses: Int,
         characters: List<String>,
     ): List<Pair<String, Float>> {
-        require(output.size == batch * timeSteps * numClasses)
+        require(output.size.toLong() == batch.toLong() * timeSteps * numClasses)
+        return decodeValues(batch, timeSteps, numClasses, characters) { output[it] }
+    }
+
+    /** Read the live ORT output buffer before closing its result; no page-sized logits copy. */
+    fun decode(output: FloatBuffer, batch: Int, timeSteps: Int, numClasses: Int, characters: List<String>): List<Pair<String, Float>> {
+        require(output.remaining().toLong() == batch.toLong() * timeSteps * numClasses)
+        val base = output.position()
+        return decodeValues(batch, timeSteps, numClasses, characters) { output.get(base + it) }
+    }
+
+    private inline fun decodeValues(batch: Int, timeSteps: Int, numClasses: Int, characters: List<String>, valueAt: (Int) -> Float): List<Pair<String, Float>> {
         return (0 until batch).map { b ->
             val base = b * timeSteps * numClasses
             val indices = IntArray(timeSteps)
@@ -90,9 +98,9 @@ object CtcDecoder {
             for (t in 0 until timeSteps) {
                 val offset = base + t * numClasses
                 var bestIndex = 0
-                var bestValue = output[offset]
+                var bestValue = valueAt(offset)
                 for (c in 1 until numClasses) {
-                    val value = output[offset + c]
+                    val value = valueAt(offset + c)
                     if (value > bestValue) {
                         bestValue = value
                         bestIndex = c
@@ -101,7 +109,8 @@ object CtcDecoder {
                 indices[t] = bestIndex
                 probs[t] = bestValue
             }
-            val kept = mutableListOf<Float>()
+            var keptSum = 0.0
+            var keptCount = 0
             val text = StringBuilder()
             var previous = -1
             for (t in 0 until timeSteps) {
@@ -110,12 +119,13 @@ object CtcDecoder {
                     val charIndex = index - 1
                     if (charIndex in characters.indices) {
                         text.append(characters[charIndex])
-                        kept += probs[t]
+                        keptSum += probs[t]
+                        keptCount++
                     }
                 }
                 previous = index
             }
-            val confidence = if (kept.isNotEmpty()) kept.average().toFloat() else 0f
+            val confidence = if (keptCount > 0) (keptSum / keptCount).toFloat() else 0f
             Pair(text.toString(), confidence)
         }
     }

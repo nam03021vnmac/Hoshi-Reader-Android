@@ -6,6 +6,46 @@ import org.junit.Test
 import kotlin.math.abs
 
 class PaddleOcrPipelineTest {
+    @Test fun batchPlannerBucketsWidthsBoundsOutputsAndPreservesEveryIndex() {
+        val widths = listOf(3000, 80, 96, 100, 250, 300, 3200)
+        val batches = recognitionBatches(widths, 4, 15000)
+        assertEquals(widths.indices.toList(), batches.flatten().sorted())
+        assertTrue(batches.all { batch -> batch.size <= 4 &&
+            (batch.size == 1 || batch.size.toLong() * ((widths[batch.last()] + 3L) / 4L + 1L) * 15000 <= 8_000_000L) })
+        assertEquals(widths.indices.map { listOf(it) }, recognitionBatches(widths, 1, 15000))
+    }
+
+    @Test fun recognitionTensorConvertsBgrToRgbWithoutAnIntermediatePlane() {
+        val bgr = ByteArray(48 * 3) { index -> if (index % 3 == 2) 0xff.toByte() else 0 }
+        val input = PaddleRecPreprocessor.preprocessBatch(listOf(RecCrop(bgr, 1, 48)))
+        assertEquals(1f, input.tensor[0], 0f)
+        assertEquals(-1f, input.tensor[48], 0f)
+        assertEquals(-1f, input.tensor[96], 0f)
+    }
+
+    @Test fun batchedCtcMatchesIndependentDecodingIncludingRepeatedJapaneseAndSupplementaryText() {
+        val chars = listOf("猫", "𠮟")
+        val first = floatArrayOf(0f, 1f, 0f, 1f, 0f, 0f, 0f, 1f, 0f)
+        val second = floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 0f, 0f)
+        val batch = CtcDecoder.decode(first + second, 2, 3, 3, chars)
+        assertEquals(CtcDecoder.decode(first, 1, 3, 3, chars).single(), batch[0])
+        assertEquals(CtcDecoder.decode(second, 1, 3, 3, chars).single(), batch[1])
+        assertEquals("猫猫", batch[0].first)
+        assertEquals("𠮟", batch[1].first)
+        val buffer = java.nio.ByteBuffer.allocateDirect((first.size + second.size) * 4)
+            .order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
+        buffer.put(first + second).rewind()
+        assertEquals(batch, CtcDecoder.decode(buffer, 2, 3, 3, chars))
+    }
+
+    @Test fun connectedComponentsMergeDiagonalAndBridgedLabelsWithoutMergingSeparateText() {
+        val w = 10
+        val prob = FloatArray(w * 10)
+        listOf(1 to 1, 3 to 1, 2 to 2, 3 to 3, 8 to 8).forEach { (x, y) -> prob[y * w + x] = 1f }
+        val components = DbPostProcessor.labelComponents(prob, w, 10, 0.3f)
+        assertEquals(listOf(1, 4), components.map { it.pixelCount }.sorted())
+    }
+
     @Test
     fun quadOrderingRestoresCorners() {
         val ordered = orderQuadPoints(

@@ -16,7 +16,10 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
   recursive popups, highlights, reading statistics, bookshelf covers, and PDF
   export. Scanned pages without selectable text can be read with on-device
   Japanese OCR, with tap lookup, highlights, and offline reuse after the first
-  scan. Recognized text remains selectable across paragraph breaks for lookup
+  scan. OCR prioritizes visible pages and keeps only nearby results in memory;
+  low-confidence pages can be retried with more source detail. Saved OCR
+  highlights retain their original text revision across recognition updates.
+  Recognized text remains selectable across paragraph breaks for lookup
   and highlights, and the overlay tracks the displayed fit-width/zoom size so
   taps select the visible characters. Selection highlights fit recognized line
   lengths rather than expanded OCR crop sizes; adjacent saved selections remain

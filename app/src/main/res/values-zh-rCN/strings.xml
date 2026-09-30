@@ -50,6 +50,7 @@
     <string name="pdf_ocr_run">运行 OCR</string>
     <string name="pdf_ocr_try_again">再试一次</string>
     <string name="pdf_ocr_keep_text">保留文字</string>
+    <string name="pdf_ocr_high_detail">以更高精度重试</string>
     <string name="import_select_srt_subtitle">请选择 .srt 字幕文件。</string>
     <string name="import_select_audiobook">请选择 .mp3、.m4b、.m4a 或 .opus 有声书文件。</string>
     <string name="import_select_audio_database">请选择 .db 音频数据库文件。</string>

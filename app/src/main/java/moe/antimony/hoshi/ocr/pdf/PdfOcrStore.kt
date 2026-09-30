@@ -3,6 +3,8 @@ package moe.antimony.hoshi.ocr.pdf
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -10,6 +12,11 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -22,16 +29,40 @@ import moe.antimony.hoshi.di.IoDispatcher
  * eviction of unpinned results, and source invalidation on reimport.
  */
 @Singleton
-class PdfOcrStore @Inject constructor(
-    @param:ApplicationContext private val context: Context,
-    @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+class PdfOcrStore internal constructor(
+    private val directory: File,
+    private val ioDispatcher: CoroutineDispatcher,
 ) {
+    @Inject constructor(
+        @ApplicationContext context: Context,
+        @IoDispatcher ioDispatcher: CoroutineDispatcher,
+    ) : this(File(context.noBackupFilesDir, "pdf-ocr"), ioDispatcher)
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val mutex = Mutex()
-    private val memory = mutableMapOf<String, OcrPageRecord>()
+    private val memory = object : LinkedHashMap<String, OcrPageRecord>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, OcrPageRecord>?): Boolean = size > 8
+    }
     private val pinsMemory = mutableMapOf<String, MutableMap<String, OcrHighlightPinRecord>>()
 
-    private fun root(): File = File(context.noBackupFilesDir, "pdf-ocr")
+    private fun root(): File = directory
+    private val maintenanceScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+    private val maintenanceMutex = Mutex()
+    private var lastMaintenanceNanos = 0L
+
+    fun scheduleEviction() {
+        maintenanceScope.launch {
+            if (!maintenanceMutex.tryLock()) return@launch
+            try {
+                val now = System.nanoTime()
+                if (lastMaintenanceNanos != 0L && now - lastMaintenanceNanos < 60_000_000_000L) return@launch
+                lastMaintenanceNanos = now
+                evictUnpinnedIfOverQuota(protectWorkingSet = true)
+            } finally {
+                maintenanceMutex.unlock()
+            }
+        }
+    }
 
     fun sourceHashForBytes(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
@@ -43,13 +74,14 @@ class PdfOcrStore @Inject constructor(
             pdfFile.inputStream().use { input ->
                 val buffer = ByteArray(64 * 1024)
                 while (true) {
+                    ensureActive()
                     val read = input.read(buffer)
                     if (read <= 0) break
                     digest.update(buffer, 0, read)
                 }
             }
             digest.digest().joinToString("") { "%02x".format(it) }
-        }.getOrNull()
+        }.onFailure { if (it is CancellationException) throw it }.getOrNull()
     }
 
     private fun activeFile(sourceHash: String, pipelineKey: String, pageIndex: Int): File =
@@ -91,22 +123,20 @@ class PdfOcrStore @Inject constructor(
     suspend fun save(record: OcrPageRecord, pipelineKey: String): Boolean = withContext(ioDispatcher) {
         val valid = record.validateOrNull() ?: return@withContext false
         mutex.withLock {
+            if (loadPinsLocked(valid.sourceSha256).values.any {
+                it.pageIndex == valid.pageIndex && it.revisionId != valid.revisionId
+            }) return@withContext false
             val revision = revisionFile(valid.sourceSha256, pipelineKey, valid.pageIndex, valid.revisionId)
             val active = activeFile(valid.sourceSha256, pipelineKey, valid.pageIndex)
             runCatching {
                 revision.parentFile?.mkdirs()
                 val temp = File(revision.parentFile, "${valid.revisionId}.tmp")
-                temp.writeText(json.encodeToString(OcrPageRecord.serializer(), valid))
-                if (!temp.renameTo(revision)) {
-                    temp.delete()
-                    return@withContext false
-                }
+                val encoded = json.encodeToString(OcrPageRecord.serializer(), valid)
+                temp.writeText(encoded)
+                Files.move(temp.toPath(), revision.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
                 val activeTemp = File(active.parentFile, "active.tmp")
-                activeTemp.writeText(json.encodeToString(OcrPageRecord.serializer(), valid))
-                if (!activeTemp.renameTo(active)) {
-                    activeTemp.delete()
-                    return@withContext false
-                }
+                activeTemp.writeText(encoded)
+                Files.move(activeTemp.toPath(), active.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
                 memory[memoryKey(valid.sourceSha256, pipelineKey, valid.pageIndex)] = valid
                 true
             }.getOrDefault(false)
@@ -128,12 +158,17 @@ class PdfOcrStore @Inject constructor(
         }
     }
 
-    suspend fun pinHighlight(pin: OcrHighlightPinRecord) = withContext(ioDispatcher) {
+    suspend fun pinHighlight(pin: OcrHighlightPinRecord): Boolean = withContext(ioDispatcher) {
+        if (pin.pageIndex < 0 || pin.revisionId.isBlank() || pin.revisionId.any { !it.isLetterOrDigit() && it != '-' && it != '_' }) return@withContext false
         mutex.withLock {
             val pins = loadPinsLocked(pin.sourceSha256).toMutableMap()
+            if (pins.values.any { it.pageIndex == pin.pageIndex && it.revisionId != pin.revisionId }) return@withContext false
+            if (findRevisionLocked(pin.sourceSha256, pin.pageIndex, pin.revisionId) == null) return@withContext false
             pins[pin.highlightId] = pin
-            writePinsLocked(pin.sourceSha256, pins)
+            if (!writePinsLocked(pin.sourceSha256, pins)) return@withContext false
             pinsMemory[pin.sourceSha256] = pins
+            memory.remove(memoryKey(pin.sourceSha256, "pinned", pin.pageIndex))
+            true
         }
     }
 
@@ -141,8 +176,10 @@ class PdfOcrStore @Inject constructor(
         mutex.withLock {
             val pins = loadPinsLocked(sourceHash).toMutableMap()
             if (pins.remove(highlightId) != null) {
-                writePinsLocked(sourceHash, pins)
-                pinsMemory[sourceHash] = pins
+                if (writePinsLocked(sourceHash, pins)) {
+                    pinsMemory[sourceHash] = pins
+                    memory.keys.removeAll { it.startsWith("$sourceHash|pinned|") }
+                }
             }
         }
     }
@@ -156,6 +193,32 @@ class PdfOcrStore @Inject constructor(
         loadRevision(pin.sourceSha256, pipelineKey, pin.pageIndex, pin.revisionId)
     }
 
+    /** Pins survive pipeline upgrades. Never apply old UTF-16 anchors to freshly recognized text. */
+    suspend fun pinnedPage(sourceHash: String, pageIndex: Int): OcrPageRecord? = withContext(ioDispatcher) {
+        mutex.withLock {
+            val pin = loadPinsLocked(sourceHash).values.firstOrNull { it.pageIndex == pageIndex }
+                ?: return@withContext null
+            val key = memoryKey(sourceHash, "pinned", pageIndex)
+            memory[key]?.takeIf { it.revisionId == pin.revisionId }?.let { return@withContext it }
+            findRevisionLocked(sourceHash, pageIndex, pin.revisionId)?.also { memory[key] = it }
+        }
+    }
+
+    private fun findRevisionLocked(sourceHash: String, pageIndex: Int, revisionId: String): OcrPageRecord? {
+        val pipelines = File(root(), sourceHash).listFiles().orEmpty().filter { it.isDirectory }
+        for (pipeline in pipelines) {
+            val file = File(pipeline, "$pageIndex/$revisionId.json")
+            val record = runCatching { json.decodeFromString<OcrPageRecord>(file.readText()) }
+                .getOrNull()?.validateOrNull() ?: continue
+            if (record.sourceSha256 == sourceHash && record.pageIndex == pageIndex && record.revisionId == revisionId) return record
+        }
+        return null
+    }
+
+    suspend fun hasPinnedPage(sourceHash: String, pageIndex: Int): Boolean = withContext(ioDispatcher) {
+        mutex.withLock { loadPinsLocked(sourceHash).values.any { it.pageIndex == pageIndex } }
+    }
+
     suspend fun deleteSource(sourceHash: String) = withContext(ioDispatcher) {
         mutex.withLock {
             memory.keys.removeAll { it.startsWith("$sourceHash|") }
@@ -166,7 +229,7 @@ class PdfOcrStore @Inject constructor(
         }
     }
 
-    suspend fun evictUnpinnedIfOverQuota(maxBytes: Long = 100L * 1024L * 1024L) =
+    suspend fun evictUnpinnedIfOverQuota(maxBytes: Long = 100L * 1024L * 1024L, protectWorkingSet: Boolean = false) =
         withContext(ioDispatcher) {
             mutex.withLock {
                 val rootDir = root()
@@ -181,17 +244,29 @@ class PdfOcrStore @Inject constructor(
                             pinsFile.readText(),
                         )
                         for (pin in pins.values) {
-                            pinnedPaths += "${pin.sourceSha256}/${pin.pageIndex}/${pin.revisionId}.json"
+                            // Pipeline is deliberately not in legacy pins; resolve in every pipeline.
+                            File(rootDir, pin.sourceSha256).listFiles().orEmpty().filter { it.isDirectory }.forEach { pipeline ->
+                                pinnedPaths += File(pipeline, "${pin.pageIndex}/${pin.revisionId}.json").absolutePath
+                            }
                         }
                     }
                 }
-                val candidates = rootDir.walkTopDown().filter { it.isFile && it.extension == "json" && it.name != "active.json" && it.name != "pins.json" }
-                    .filter { file -> pinnedPaths.none { suffix -> file.absolutePath.replace('\\', '/').endsWith(suffix) } }
+                val pinnedPages = pinnedPaths.map { File(it).parentFile!!.absolutePath }.toSet()
+                // A displayed old revision can be pinned while a retry is waiting to install.
+                // Keep every revision of cached working-set pages until they leave the LRU.
+                val livePages = if (protectWorkingSet) memory.values.map { "${it.sourceSha256}/${it.pageIndex}" }.toSet() else emptySet()
+                val candidates = rootDir.walkTopDown().filter { it.isFile && it.extension == "json" && it.name != "pins.json" }
+                    .filter { file -> file.absolutePath !in pinnedPaths &&
+                        !(file.name == "active.json" && file.parentFile!!.absolutePath in pinnedPages) &&
+                        "${file.parentFile?.parentFile?.parentFile?.name}/${file.parentFile?.name}" !in livePages }
                     .sortedBy { it.lastModified() }
                 for (file in candidates) {
                     if (total <= maxBytes) break
                     val size = file.length()
-                    if (runCatching { file.delete() }.getOrDefault(false)) total -= size
+                    if (runCatching { file.delete() }.getOrDefault(false)) {
+                        total -= size
+                        if (file.name == "active.json") memory.clear()
+                    }
                 }
             }
         }
@@ -210,7 +285,7 @@ class PdfOcrStore @Inject constructor(
         return pins
     }
 
-    private fun writePinsLocked(sourceHash: String, pins: Map<String, OcrHighlightPinRecord>) {
+    private fun writePinsLocked(sourceHash: String, pins: Map<String, OcrHighlightPinRecord>): Boolean =
         runCatching {
             val file = pinsFile(sourceHash)
             file.parentFile?.mkdirs()
@@ -221,7 +296,7 @@ class PdfOcrStore @Inject constructor(
                     pins,
                 ),
             )
-            temp.renameTo(file)
-        }
-    }
+            Files.move(temp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            true
+        }.getOrDefault(false)
 }

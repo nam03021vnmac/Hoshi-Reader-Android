@@ -145,6 +145,7 @@ function fakeDocument() {
   };
   return {
     createElement: makeElement,
+    addEventListener() {},
     createTextNode,
     createTreeWalker,
   };
@@ -265,6 +266,19 @@ test('canonical DOM keeps paragraph separators as offsets, not bare <br>', () =>
   const built = layer.buildOcrDom(document, payload, 450, 600);
   assert.ok(built);
   assertCanonicalNodes(built, payload.canonicalText, [[0, 3], [3, 4], [4, 6]]);
+});
+
+test('explicit recognition direction controls short vertical fragments rather than a second aspect-ratio guess', () => {
+  const layer = loadLayer();
+  const quad = { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.1, x2: 0.2, y2: 0.2, x3: 0.1, y3: 0.2 };
+  const payload = {
+    sessionId: 's', pageIndex: 0, requestId: 1, revisionId: 'r', sourceHash: 'a'.repeat(64),
+    canonicalText: '猫', cssWidth: 600, cssHeight: 800,
+    spans: [{ sourceId: 'l', startUtf16: 0, endUtf16: 1, text: '猫', quad, direction: 'VERTICAL' }],
+  };
+  const built = layer.buildOcrDom(fakeDocument(), payload);
+  assert.equal(built.textNodes[0].node.parentElement.style.writingMode, 'vertical-rl');
+  assert.equal(built.pageText, '猫');
 });
 
 test('canonical DOM registers attached UTF16 text nodes for gaps and trailing slices', () => {

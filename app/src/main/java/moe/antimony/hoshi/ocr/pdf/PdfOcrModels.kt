@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 /** Pipeline identity for cache invalidation. Bump on raster/model/postprocessor changes. */
 object PdfOcrPipeline {
-    const val VERSION = "pdf-ocr-v1"
+    const val VERSION = "pdf-ocr-v2"
     const val LANGUAGE = "ja"
     const val SCHEMA_VERSION = 1
 
@@ -77,6 +77,7 @@ data class OcrSpanRecord(
     val quad: NormalizedQuad? = null,
     /** "observed" for symbol geometry, "line-estimate" for subdivided lines. */
     val geometryPrecision: String = "line-estimate",
+    val direction: String = "UNKNOWN",
 )
 
 @Serializable
