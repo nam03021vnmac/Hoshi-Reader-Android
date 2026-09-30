@@ -177,7 +177,7 @@ class PdfOcrGeometryWebViewTest {
                             const height = factor * (line.vertical ? advance * count : thickness);
                             return { left, top, width, height, right: left + width, bottom: top + height };
                         };
-                        lines.forEach((line, index) => {
+                         lines.forEach((line, index) => {
                             const node = built.textNodes[index].node;
                             const chars = Array.from(line.text);
                             const name = label + ' ' + line.name;
@@ -224,10 +224,41 @@ class PdfOcrGeometryWebViewTest {
                                 range.setEnd(node, offset + ch.length);
                                 rectMatches(range.getBoundingClientRect(), expected, name + ' after scroll');
                                 offset += ch.length;
-                                hits++;
-                            });
-                        });
-                        cases++;
+                                 hits++;
+                             });
+                         });
+                         // Mixed-direction runs can have separate client rects.
+                         // Include upright/sideways vertical text and fit the entire
+                         // range, then verify a repeat fit does not undo it.
+                         built.layer.remove();
+                         for (const vertical of [false, true]) {
+                             const mixedText = '\u65e5ABC\u05d0\u05d1\u05d2\u672cDEF\u8a9e';
+                             const line = { text: mixedText, x: 24, y: 48,
+                                 w: vertical ? 36 : 180, h: vertical ? 180 : 36, vertical };
+                             const left = line.x / 240, right = (line.x + line.w) / 240;
+                             const top = line.y / 480, bottom = (line.y + line.h) / 480;
+                             const mixed = window.hoshiPdfOcrLayer.buildOcrDom(document, {
+                                 ...payload, canonicalText: mixedText, spans: [{
+                                     sourceId: 'mixed', text: mixedText, startUtf16: 0,
+                                     endUtf16: mixedText.length,
+                                     quad: { x0: left, y0: top, x1: right, y1: top,
+                                         x2: right, y2: bottom, x3: left, y3: bottom }
+                                 }]
+                             }, w, h);
+                             page.appendChild(mixed.layer);
+                             range.selectNodeContents(mixed.textNodes[0].node);
+                             check(range.getClientRects().length > 1,
+                                 label + ' mixed-direction fixture must exercise fragmented bounds');
+                             for (let pass = 0; pass < 2; pass++) {
+                                 window.hoshiPdfOcrLayer.fitOcrDom(document, mixed);
+                                 range.selectNodeContents(mixed.textNodes[0].node);
+                                 rectMatches(range.getBoundingClientRect(),
+                                     target(line, 0, mixedText.length),
+                                     label + ' mixed vertical=' + vertical + ' fit=' + pass);
+                             }
+                             mixed.layer.remove();
+                         }
+                         cases++;
                     }
                 }
                 window.geometryResult = { failures, cases, hits };

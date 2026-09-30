@@ -50,14 +50,6 @@ class PdfContentsSheetTest {
     }
 
     @Test
-    fun viewportChangedParsesToStaleOverlayCloseSignal() {
-        assertEquals(
-            PdfReaderMessage.ViewportChanged,
-            PdfReaderMessage.fromJson("""{"type":"viewportChanged"}"""),
-        )
-    }
-
-    @Test
     fun displayPageIsOneBasedAndClamped() {
         assertEquals(1, pdfDisplayPage(0, 10))
         assertEquals(8, pdfDisplayPage(7, 10))

@@ -384,20 +384,6 @@ function installOcrPayload(record, payload, viewport) {
   record.textLayerDiv = built.layer;
   record.div.appendChild(built.layer);
   layerApi.fitOcrDom(document, built);
-  // Font timing leaves fallback metrics in the first fit on some pages;
-  // re-fit once the real fonts arrive so the selection overlay keeps
-  // covering the visible glyphs. fitOcrDom is idempotent.
-  try {
-    const fontsReady = document.fonts && document.fonts.ready;
-    if (fontsReady && typeof fontsReady.then === 'function') {
-      fontsReady.then(() => {
-        try {
-          if (record.textLayerDiv !== built.layer) return;
-          layerApi.fitOcrDom(document, built);
-        } catch {}
-      });
-    }
-  } catch {}
   record.textNodes = built.textNodes;
   record.pageText = built.pageText;
   record.textSource = 'ocr';
