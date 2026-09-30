@@ -4,7 +4,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -85,7 +88,7 @@ internal fun PdfOcrStatusOverlay(
             } else if (!pageState.highResUsed && !pageState.revisionLocked &&
                 pageState.record?.qualityFlags?.contains("low-confidence") == true) {
                 TextButton(onClick = onRetryHighRes, modifier = modifier) {
-                    Text(stringResource(R.string.pdf_ocr_high_detail))
+                    Icon(Icons.Rounded.AutoFixHigh, contentDescription = null)
                 }
             }
         }
@@ -114,7 +117,7 @@ internal fun PdfOcrStatusOverlay(
                         }
                         if (!pageState.highResUsed && !pageState.revisionLocked) {
                             TextButton(onClick = onRetryHighRes) {
-                                Text(stringResource(R.string.pdf_ocr_high_detail))
+                                Icon(Icons.Rounded.AutoFixHigh, contentDescription = null)
                             }
                         }
                     }
