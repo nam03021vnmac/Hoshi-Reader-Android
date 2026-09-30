@@ -252,18 +252,16 @@ test('sasayaki controls receive the larger control icon treatment', () => {
     });
 });
 
-test('floating close button appears when the action bar is hidden', () => {
+test('no floating close button when the action bar is hidden', () => {
     const scene = popupHost();
     scene.host.renderStack({ popups: [rootPopupPayload()] });
     const shell = scene.document.getElementById('hoshi-reader-popup-layer').children[0];
 
     assert.equal(shell.querySelector('.hoshi-reader-popup-action-bar'), null);
-    const closeFab = shell.querySelector('.hoshi-reader-popup-close-fab');
-    assert.notEqual(closeFab, null);
-    assert.equal(closeFab.attributes.get('aria-label'), 'Close');
+    assert.equal(shell.querySelector('.hoshi-reader-popup-close-fab'), null);
 });
 
-test('action bar close replaces the floating close button', () => {
+test('action bar has no floating close button', () => {
     const { actionBar } = renderControls();
     const shell = actionBar.parentNode;
     const closeFab = shell.querySelector('.hoshi-reader-popup-close-fab');
@@ -285,7 +283,7 @@ test('dictionary search root has no floating close button', () => {
     assert.equal(shell.querySelector('.hoshi-reader-popup-close-fab'), null);
 });
 
-test('floating close button dismisses the popup', () => {
+test('action bar close dismisses the popup', () => {
     const scene = popupHost();
     const nativeMessages = [];
     scene.window.HoshiReaderPopup = {
@@ -293,11 +291,13 @@ test('floating close button dismisses the popup', () => {
             nativeMessages.push(JSON.parse(message));
         },
     };
-    scene.host.renderStack({ popups: [rootPopupPayload()] });
+    scene.host.renderStack({ popups: [{ ...rootPopupPayload(), actionBarVisible: true, backCount: 1 }] });
     const shell = scene.document.getElementById('hoshi-reader-popup-layer').children[0];
-    const closeFab = shell.querySelector('.hoshi-reader-popup-close-fab');
+    const closeButton = shell.querySelector('.hoshi-reader-popup-action-bar').children.find((child) =>
+        child.attributes.get('aria-label') === 'Close',
+    );
     const fakeEvent = { preventDefault() {}, stopPropagation() {} };
-    (closeFab.eventListeners.get('click') ?? []).forEach((listener) => listener(fakeEvent));
+    (closeButton.eventListeners.get('click') ?? []).forEach((listener) => listener(fakeEvent));
 
     assert.deepEqual(nativeMessages, [{ name: 'swipeDismiss', popupId: 'root' }]);
 });

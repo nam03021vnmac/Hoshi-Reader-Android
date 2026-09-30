@@ -33,9 +33,6 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
   and keeps playing forward, without flashing a dictionary popup. While this setting is
   armed with an audiobook loaded, single-tap lookup waits briefly to confirm the tap is
   not a double-tap seek.
-- Add an always-visible close button to lookup popups when the action bar is hidden, so
-  dictionary results can be dismissed without opening the action bar or using outside-tap
-  and swipe gestures.
 
 ### Fixed
 
