@@ -30,6 +30,8 @@ const state = {
   pdf: null,
   pageCount: 0,
   zoomFactor: 1.0, // 1 = fit width
+  continuousScroll: false,
+  pageSwipeThresholdPx: 72,
   fitWidthScale: 1.0,
   pages: [], // index -> page record
   visibleFirst: -1,
@@ -105,6 +107,7 @@ function baseViewportFor(page) {
 
 function applyPageSize(record) {
   if (!record.div || record.baseWidth <= 0) return;
+  record.div.style.display = state.continuousScroll || record.index === state.currentPageIndex ? '' : 'none';
   const scale = currentCssScale();
   const width = record.baseWidth * scale;
   record.div.style.width = `${width}px`;
@@ -173,6 +176,10 @@ function renderScaleChanged() {
 
 function visibleRange() {
   if (state.pageCount === 0) return { first: 0, last: 0 };
+  if (!state.continuousScroll) {
+    const index = Math.max(0, state.currentPageIndex);
+    return { first: index, last: index };
+  }
   const scrollTop = viewport.scrollTop;
   const clientHeight = Math.max(1, viewport.clientHeight);
   const topBound = scrollTop;
@@ -382,6 +389,7 @@ function probeEmbeddedText(record, extractionFailed) {
 }
 
 function installOcrPayload(record, payload, viewport) {
+  if (!state.continuousScroll && record.index !== state.currentPageIndex) return false;
   const installStarted = globalThis.performance?.now?.();
   const layerApi = globalThis.hoshiPdfOcrLayer;
   if (!layerApi || !record.div) return false;
@@ -493,6 +501,7 @@ function onScroll() {
       if (!state.pdf || state.opening) return;
       const { first, last } = visibleRange();
       scheduleRender(first, last);
+      flushPendingOcr();
       reportCurrentPage();
       reportReady();
     });
@@ -503,10 +512,25 @@ function scrollToPage(index) {
   const record = pageRecord(index);
   const div = record.div;
   if (!div) return;
-  viewport.scrollTop = Math.max(0, div.offsetTop - 8);
   state.currentPageIndex = index;
+  layoutAllPages();
+  viewport.scrollLeft = 0;
+  viewport.scrollTop = Math.max(0, div.offsetTop - 8);
   postMessage({ type: 'pageChanged', pageIndex: index, pageCount: state.pageCount });
   onScroll();
+}
+
+function setViewMode(continuousScroll, pageSwipeThresholdPx = state.pageSwipeThresholdPx) {
+  if (Number.isFinite(pageSwipeThresholdPx)) state.pageSwipeThresholdPx = Math.max(0, pageSwipeThresholdPx);
+  const continuous = continuousScroll === true;
+  if (state.continuousScroll === continuous) return;
+  state.continuousScroll = continuous;
+  if (!state.pdf || state.opening) return;
+  state.preparedSelection = null;
+  window.getSelection()?.removeAllRanges();
+  window.hoshiSelection?.clearSelection();
+  postMessage({ type: 'viewportChanged' });
+  scrollToPage(Math.max(0, state.currentPageIndex));
 }
 
 function setZoomFactor(factor) {
@@ -550,6 +574,7 @@ async function fitWidth() {
 function jumpToPage(pageIndex) {
   if (!state.pdf || state.opening || !Number.isFinite(pageIndex)) return;
   state.preparedSelection = null;
+  window.getSelection()?.removeAllRanges();
   window.hoshiSelection?.clearSelection();
   const index = Math.min(state.pageCount - 1, Math.max(0, Math.trunc(pageIndex)));
   const record = pageRecord(index);
@@ -878,7 +903,7 @@ window.hoshiPdfOcr = {
     if (latestRequest !== undefined && valid.requestId < latestRequest) return false;
     state.ocrRequestByPage.set(valid.pageIndex, valid.requestId);
     state.ocrByPage.set(valid.pageIndex, valid);
-    if (!record || !record.div || !record.rendered) {
+    if (!record || !record.div || !record.rendered || (!state.continuousScroll && record.index !== state.currentPageIndex)) {
       // Discarded pages keep the cached payload and install it on next render.
       return true;
     }
@@ -914,6 +939,8 @@ window.hoshiPdfReader = {
     state.opening = true;
     state.ready = false;
     state.failed = false;
+    state.continuousScroll = config.continuousScroll === true;
+    state.pageSwipeThresholdPx = Number.isFinite(config.pageSwipeThresholdPx) ? Math.max(0, config.pageSwipeThresholdPx) : 72;
     state.sessionId = typeof config.sessionId === 'string' ? config.sessionId : '';
     state.ocrByPage = new Map();
     state.ocrRequestByPage = new Map();
@@ -966,6 +993,7 @@ window.hoshiPdfReader = {
   zoomOut,
   fitWidth,
   jumpToPage,
+  setViewMode,
   applyHighlights: applyHighlightIndex,
   setSessionId(sessionId) {
     if (typeof sessionId !== 'string' || !sessionId) return;
@@ -1073,6 +1101,18 @@ viewport.addEventListener(
     if (state.pinch) {
       if (event.touches.length < 2) endPinch();
       return;
+    }
+    if (touchStarted && event.touches.length === 0 && !state.continuousScroll &&
+        state.pageSwipeThresholdPx > 0 && Date.now() - touchStarted.time < 600 &&
+        !window.getSelection()?.toString() && !window.hoshiSelection?.selection &&
+        state.pages[state.currentPageIndex]?.div?.offsetWidth <= viewport.clientWidth + 1) {
+      const end = event.changedTouches?.[0];
+      const dx = end ? end.clientX - touchStarted.x : 0;
+      const dy = end ? end.clientY - touchStarted.y : 0;
+      if (Math.abs(dx) >= state.pageSwipeThresholdPx && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        jumpToPage(state.currentPageIndex + (dx < 0 ? 1 : -1));
+        tapCandidate = null;
+      }
     }
     if (tapCandidate && event.touches.length === 0) {
       const candidate = tapCandidate;

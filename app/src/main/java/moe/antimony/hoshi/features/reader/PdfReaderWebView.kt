@@ -741,6 +741,8 @@ internal fun PdfReaderWebView(
                         backgroundCss = backgroundColor,
                         pageIndex = currentPageIndex.value,
                         zoomFactor = currentZoomFactor.value,
+                        continuousScroll = currentEffectiveSettings.value.pdfContinuousScroll,
+                        pageSwipeThresholdPx = currentEffectiveSettings.value.pageSwipeThresholdPx,
                         highlightsJson = highlightsJson,
                         sessionId = currentOcrSessionId.value,
                     ),
@@ -816,6 +818,14 @@ internal fun PdfReaderWebView(
         }
     }
     val currentHandlePdfMessage = rememberUpdatedState(handlePdfMessage)
+    LaunchedEffect(webView, isReaderReady, effectiveSettings.pdfContinuousScroll, effectiveSettings.pageSwipeThresholdPx) {
+        if (!isReaderReady) return@LaunchedEffect
+        closeLookupPopupsAndSelection()
+        webView?.evaluateJavascript(
+            "window.hoshiPdfReader.setViewMode(${effectiveSettings.pdfContinuousScroll}, ${effectiveSettings.pageSwipeThresholdPx})",
+            null,
+        )
+    }
 
     var deliveredOcrRevisions by remember { mutableStateOf(mapOf<Int, String>()) }
     LaunchedEffect(ocrUiState.sessionId) {
@@ -1249,6 +1259,10 @@ internal fun PdfReaderWebView(
     if (showAppearance) {
         PdfAppearanceSheet(
             zoomFactor = zoomFactor,
+            continuousScroll = effectiveSettings.pdfContinuousScroll,
+            onContinuousScrollChange = { continuous ->
+                onReaderSettingsChange { it.copy(pdfContinuousScroll = continuous) }
+            },
             onZoomIn = { webView?.evaluateJavascript("window.hoshiPdfReader.zoomIn()", null) },
             onZoomOut = { webView?.evaluateJavascript("window.hoshiPdfReader.zoomOut()", null) },
             onFitWidth = { webView?.evaluateJavascript("window.hoshiPdfReader.fitWidth()", null) },
@@ -1362,6 +1376,8 @@ private fun pdfReaderSetupScript(
     backgroundCss: String,
     pageIndex: Int,
     zoomFactor: Double,
+    continuousScroll: Boolean,
+    pageSwipeThresholdPx: Int,
     highlightsJson: String,
     sessionId: String,
 ): String {
@@ -1386,6 +1402,8 @@ private fun pdfReaderSetupScript(
             url: '/pdfbook/data',
             pageIndex: $pageIndex,
             zoomFactor: $zoomFactor,
+            continuousScroll: $continuousScroll,
+            pageSwipeThresholdPx: $pageSwipeThresholdPx,
             sessionId: ${readerJavaScriptStringLiteral(sessionId)}
           });
         })();

@@ -95,6 +95,7 @@ data class ReaderSettings(
     val fontSize: Int = 22,
     val furiganaMode: FuriganaMode = FuriganaMode.Off,
     val viewMode: ReaderViewMode = ReaderViewMode.Paginated,
+    val pdfContinuousScroll: Boolean = false,
     val visualNovelRevealSpeed: Int = 45,
     val visualNovelScreenMode: VisualNovelScreenMode = VisualNovelScreenMode.Block,
     val visualNovelSentencesPerScreen: Int = 1,
@@ -436,6 +437,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             preferences.getString("readerViewMode", null),
             legacyContinuousMode = preferences.getBoolean("continuousMode", false),
         ),
+        pdfContinuousScroll = preferences.getBoolean("pdfContinuousScroll", false),
         visualNovelRevealSpeed = preferences.getInt("visualNovelRevealSpeed", 45).coerceVisualNovelRevealSpeed(),
         visualNovelScreenMode = VisualNovelScreenMode.fromStorage(preferences.getString("visualNovelScreenMode", null)),
         visualNovelSentencesPerScreen = preferences.getInt("visualNovelSentencesPerScreen", 1).coerceIn(1, 12),
@@ -525,6 +527,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putString("furiganaMode", settings.furiganaMode.name)
             .putBoolean("readerHideFurigana", settings.furiganaMode == FuriganaMode.Hidden)
             .putString("readerViewMode", settings.viewMode.rawValue)
+            .putBoolean("pdfContinuousScroll", settings.pdfContinuousScroll)
             .putBoolean("continuousMode", settings.continuousMode)
             .putInt("visualNovelRevealSpeed", settings.visualNovelRevealSpeed.coerceVisualNovelRevealSpeed())
             .putString("visualNovelScreenMode", settings.visualNovelScreenMode.rawValue)
@@ -712,6 +715,7 @@ class ReaderSettingsRepository(
                 .orEmpty(),
             fontSize = this[KEY_FONT_SIZE] ?: 22,
             furiganaMode = FuriganaMode.fromStorage(this[KEY_FURIGANA_MODE], this[KEY_HIDE_FURIGANA] ?: false),
+            pdfContinuousScroll = this[KEY_PDF_CONTINUOUS_SCROLL] ?: false,
             viewMode = ReaderViewMode.fromStorage(
                 this[KEY_READER_VIEW_MODE],
                 legacyContinuousMode = this[KEY_CONTINUOUS_MODE] ?: false,
@@ -794,6 +798,7 @@ class ReaderSettingsRepository(
         this[KEY_FURIGANA_MODE] = settings.furiganaMode.name
         this[KEY_HIDE_FURIGANA] = settings.furiganaMode == FuriganaMode.Hidden
         this[KEY_READER_VIEW_MODE] = settings.viewMode.rawValue
+        this[KEY_PDF_CONTINUOUS_SCROLL] = settings.pdfContinuousScroll
         this[KEY_CONTINUOUS_MODE] = settings.continuousMode
         this[KEY_VISUAL_NOVEL_REVEAL_SPEED] = settings.visualNovelRevealSpeed.coerceVisualNovelRevealSpeed()
         this[KEY_VISUAL_NOVEL_SCREEN_MODE] = settings.visualNovelScreenMode.rawValue
@@ -917,6 +922,7 @@ class ReaderSettingsRepository(
         private val KEY_FURIGANA_MODE = stringPreferencesKey("furiganaMode")
         private val KEY_HIDE_FURIGANA = booleanPreferencesKey("readerHideFurigana")
         private val KEY_READER_VIEW_MODE = stringPreferencesKey("readerViewMode")
+        private val KEY_PDF_CONTINUOUS_SCROLL = booleanPreferencesKey("pdfContinuousScroll")
         private val KEY_CONTINUOUS_MODE = booleanPreferencesKey("continuousMode")
         private val KEY_VISUAL_NOVEL_REVEAL_SPEED = intPreferencesKey("visualNovelRevealSpeed")
         private val KEY_VISUAL_NOVEL_SCREEN_MODE = stringPreferencesKey("visualNovelScreenMode")
@@ -1101,6 +1107,7 @@ private data class ProfileReaderAppearanceSettings(
     val furiganaMode: FuriganaMode? = null,
     val hideFurigana: Boolean = false,
     val viewMode: ReaderViewMode? = null,
+    val pdfContinuousScroll: Boolean = false,
     val continuousMode: Boolean = false,
     val visualNovelRevealSpeed: Int = 45,
     val visualNovelScreenMode: VisualNovelScreenMode = VisualNovelScreenMode.Block,
@@ -1163,6 +1170,7 @@ private fun ReaderSettings.toProfileAppearanceSettings(): ProfileReaderAppearanc
         furiganaMode = furiganaMode,
         hideFurigana = furiganaMode == FuriganaMode.Hidden,
         viewMode = viewMode,
+        pdfContinuousScroll = pdfContinuousScroll,
         continuousMode = continuousMode,
         visualNovelRevealSpeed = visualNovelRevealSpeed.coerceVisualNovelRevealSpeed(),
         visualNovelScreenMode = visualNovelScreenMode,
@@ -1223,6 +1231,7 @@ private fun ReaderSettings.withProfileAppearance(appearance: ProfileReaderAppear
         fontVariantSelections = appearance.fontVariantSelections,
         fontSize = appearance.fontSize,
         furiganaMode = appearance.furiganaMode ?: FuriganaMode.fromStorage(null, appearance.hideFurigana),
+        pdfContinuousScroll = appearance.pdfContinuousScroll,
         viewMode = appearance.viewMode ?: if (appearance.continuousMode) {
             ReaderViewMode.Continuous
         } else {

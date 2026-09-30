@@ -562,6 +562,7 @@ class ReaderSettingsRepositoryTest {
                 it.copy(
                     theme = ReaderTheme.Dark,
                     fontSize = 30,
+                    pdfContinuousScroll = true,
                     furiganaMode = FuriganaMode.Toggle,
                     popupWidth = 440,
                     pageSwipeThresholdPx = 96,
@@ -580,6 +581,7 @@ class ReaderSettingsRepositoryTest {
             val inherited = repository.settings.first()
             assertEquals(ReaderTheme.Dark, inherited.theme)
             assertEquals(30, inherited.fontSize)
+            assertTrue(inherited.pdfContinuousScroll)
             assertEquals(FuriganaMode.Toggle, inherited.furiganaMode)
             assertEquals(440, inherited.popupWidth)
             assertEquals(96, inherited.pageSwipeThresholdPx)
@@ -595,6 +597,7 @@ class ReaderSettingsRepositoryTest {
                 it.copy(
                     theme = ReaderTheme.Light,
                     fontSize = 18,
+                    pdfContinuousScroll = false,
                     furiganaMode = FuriganaMode.Dimmed,
                     popupWidth = 280,
                     pageSwipeThresholdPx = 120,
@@ -612,6 +615,7 @@ class ReaderSettingsRepositoryTest {
             val japanese = repository.settings.first()
             assertEquals(ReaderTheme.Dark, japanese.theme)
             assertEquals(30, japanese.fontSize)
+            assertTrue(japanese.pdfContinuousScroll)
             assertEquals(FuriganaMode.Toggle, japanese.furiganaMode)
             assertEquals(440, japanese.popupWidth)
             assertEquals(96, japanese.pageSwipeThresholdPx)
@@ -643,6 +647,36 @@ class ReaderSettingsRepositoryTest {
                 repository.update { it.copy(furiganaMode = mode) }
                 assertEquals(mode, repository.settings.first().furiganaMode)
             }
+        }
+    }
+
+    @Test
+    fun pdfModeDefaultsToSinglePageAndPersistsIndependentlyOfEpubMode() = runBlocking {
+        repository().use { repository ->
+            assertFalse(repository.settings.first().pdfContinuousScroll)
+            repository.update { it.copy(viewMode = ReaderViewMode.VisualNovel, pdfContinuousScroll = true) }
+            assertTrue(repository.settings.first().pdfContinuousScroll)
+            assertEquals(ReaderViewMode.VisualNovel, repository.settings.first().viewMode)
+            repository.update { it.copy(pdfContinuousScroll = false) }
+            assertFalse(repository.settings.first().pdfContinuousScroll)
+            assertEquals(ReaderViewMode.VisualNovel, repository.settings.first().viewMode)
+        }
+    }
+
+    @Test
+    fun legacyProfileDefaultsToSinglePageAndSavedPdfModeSurvivesReopening() = runBlocking {
+        val profiles = ProfileRepository(tempFolder.newFolder("pdf-profiles"))
+        val file = profiles.readerSettingsFile()
+        file.parentFile?.mkdirs()
+        file.writeText("""{"continuousMode":true}""")
+        repository(profileRepository = profiles).use { repository ->
+            assertFalse(repository.settings.first().pdfContinuousScroll)
+            assertEquals(ReaderViewMode.Continuous, repository.settings.first().viewMode)
+            repository.update { it.copy(pdfContinuousScroll = true) }
+        }
+        repository(profileRepository = profiles, fileName = "pdf-reopened.preferences_pb").use { repository ->
+            assertTrue(repository.settings.first().pdfContinuousScroll)
+            assertEquals(ReaderViewMode.Continuous, repository.settings.first().viewMode)
         }
     }
 

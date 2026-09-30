@@ -17,6 +17,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -166,6 +167,8 @@ private fun PdfOutlineListRow(
 @Composable
 internal fun PdfAppearanceSheet(
     zoomFactor: Double,
+    continuousScroll: Boolean,
+    onContinuousScrollChange: (Boolean) -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onFitWidth: () -> Unit,
@@ -186,6 +189,16 @@ internal fun PdfAppearanceSheet(
                 text = stringResource(R.string.settings_appearance),
                 style = MaterialTheme.typography.titleLarge,
             )
+            listOf(false to R.string.pdf_single_page, true to R.string.pdf_continuous_scroll).forEach { (continuous, label) ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { onContinuousScrollChange(continuous) },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = continuousScroll == continuous, onClick = null)
+                    Text(text = stringResource(label), style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,

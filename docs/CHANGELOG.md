@@ -11,8 +11,9 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
 - Import and read PDF books alongside EPUB, from files, folders, or shared PDF
   documents. PDF books render through the bundled offline reader with restored
   page position, the shared EPUB-style chrome with focus mode and menu, a
-  Contents sheet with page slider and PDF chapter outline, a zoom-only
-  Appearance sheet, volume-key page turning, tap lookup with
+  Contents sheet with page slider and PDF chapter outline, single-page viewing
+  by default with swipe page turns and a saved continuous-scroll option in
+  Appearance alongside zoom controls, volume-key page turning, tap lookup with
   recursive popups, highlights, reading statistics, bookshelf covers, and PDF
   export. Scanned pages without selectable text can be read with on-device
   Japanese OCR, with tap lookup, highlights, and offline reuse after the first

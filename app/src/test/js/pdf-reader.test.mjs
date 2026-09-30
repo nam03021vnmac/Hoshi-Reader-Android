@@ -52,12 +52,13 @@ class Element {
   setAttribute() {}
   get offsetWidth() { return parseFloat(this.style.width) || 0; }
   get offsetHeight() {
+    if (this.style.display === 'none') return 0;
     const [width, height] = (this.style.aspectRatio || '1 / 1').split('/').map(Number);
     return this.offsetWidth * height / width;
   }
   get offsetTop() {
     const siblings = this.parentElement?.children || [];
-    return 8 + siblings.slice(0, siblings.indexOf(this)).reduce((sum, item) => sum + item.offsetHeight + 12, 0);
+    return 8 + siblings.slice(0, siblings.indexOf(this)).reduce((sum, item) => sum + (item.style.display === 'none' ? 0 : item.offsetHeight + 12), 0);
   }
   get offsetLeft() { return 0; }
   getContext() { return { canvas: this }; }
@@ -289,7 +290,7 @@ function reader({ count = 12, pendingRender = false, pendingText = false, texts 
 
 test('initial restore sizes every placeholder and renders only the nearby page window', async () => {
   const r = reader();
-  await r.api.open({ pageIndex: 7 });
+  await r.api.open({ pageIndex: 7, continuousScroll: true });
   await r.flush();
   assert.equal(r.root.children.length, 12);
   assert.ok(r.root.children.every((page) => page.offsetWidth === 600 && page.offsetHeight === 800));
@@ -313,6 +314,70 @@ function ocrPayload(pageIndex = 0, revisionId = 'old', requestId = 1, text = 'çŒ
   };
 }
 
+test('single page is the default; switching modes preserves page and zoom', async () => {
+  const r = reader();
+  await r.api.open({ pageIndex: 7 });
+  await r.flush();
+  const shown = () => r.root.children.filter(page => page.style.display !== 'none');
+  assert.deepEqual(shown(), [r.root.children[7]]);
+  assert.equal(r.viewport.scrollTop, 0);
+  const visible = r.messages.filter(m => m.type === 'ocrViewport').at(-1);
+  assert.equal(visible.firstVisible, 7);
+  assert.equal(visible.lastVisible, 7);
+  r.api.setZoomFactor(2);
+  r.api.setViewMode(true);
+  await r.flush();
+  assert.equal(shown().length, 12);
+  assert.equal(JSON.parse(r.api.progress()).pageIndex, 7);
+  assert.equal(r.root.children[7].offsetWidth, 1200);
+  r.api.setViewMode(false);
+  await r.flush();
+  assert.deepEqual(shown(), [r.root.children[7]]);
+  r.api.jumpToPage(100);
+  await r.flush();
+  assert.deepEqual(shown(), [r.root.children[11]]);
+});
+
+test('single-page swipes turn pages, respect boundaries, and do not hijack zoom or continuous scroll', async () => {
+  const r = reader({ count: 3 });
+  await r.api.open();
+  await r.flush();
+  const swipe = (dx, dy = 0) => {
+    r.viewport.dispatch('touchstart', { touches: [{ clientX: 300, clientY: 300 }] });
+    r.viewport.dispatch('touchmove', { touches: [{ clientX: 300 + dx, clientY: 300 + dy }] });
+    r.viewport.dispatch('touchend', { touches: [], changedTouches: [{ clientX: 300 + dx, clientY: 300 + dy }] });
+  };
+  const page = () => JSON.parse(r.api.progress()).pageIndex;
+  swipe(100);
+  assert.equal(page(), 0);
+  swipe(-71);
+  assert.equal(page(), 0);
+  swipe(-72);
+  await r.flush();
+  assert.equal(page(), 1);
+  swipe(-100, 200);
+  assert.equal(page(), 1);
+  r.api.setZoomFactor(2);
+  swipe(-100);
+  assert.equal(page(), 1);
+  await r.api.fitWidth();
+  r.api.setViewMode(false, 0);
+  swipe(-100);
+  assert.equal(page(), 1);
+  r.api.setViewMode(true, 72);
+  await r.flush();
+  swipe(-100);
+  assert.equal(page(), 1);
+  r.api.setViewMode(false);
+  await r.flush();
+  swipe(-100);
+  await r.flush();
+  swipe(-100);
+  assert.equal(page(), 2);
+  swipe(100);
+  assert.equal(page(), 1);
+});
+
 test('OCR replacement waits for native selection and acknowledges the installed revision', async () => {
   const r = reader({ texts: [] });
   await r.api.open({ sessionId: 'ocr-test' });
@@ -328,6 +393,19 @@ test('OCR replacement waits for native selection and acknowledges the installed 
   await r.flush();
   assert.equal(old.parentElement, null);
   assert.equal(r.messages.filter(m => m.type === 'ocrInstalled').at(-1).revisionId, 'new');
+});
+
+test('prefetched OCR waits until its single page is visible before fitting the overlay', async () => {
+  const r = reader({ texts: [] });
+  await r.api.open({ sessionId: 'ocr-test' });
+  await r.flush();
+  assert.equal(r.ocr.applyOcr(ocrPayload(1)), true);
+  assert.equal(r.messages.some(m => m.type === 'ocrInstalled' && m.pageIndex === 1), false);
+  r.api.jumpToPage(1);
+  await r.flush();
+  assert.ok(r.messages.some(m => m.type === 'ocrInstalled' && m.pageIndex === 1));
+  const overlay = r.root.children[1].children.find(child => child.classList.contains('hoshi-pdf-ocr-layer'));
+  assert.equal(overlay.textContent, 'çŒ«');
 });
 
 test('OCR lookup selection defers replacement and a saved highlight retains its original source', async () => {

@@ -42,6 +42,8 @@
     <string name="import_select_book">Select an EPUB or PDF book file.</string>
     <string name="pdf_zoom_out">Zoom out</string>
     <string name="pdf_zoom_in">Zoom in</string>
+    <string name="pdf_single_page">Single page</string>
+    <string name="pdf_continuous_scroll">Continuous scroll</string>
     <string name="pdf_fit_width">Fit width</string>
     <string name="pdf_ocr_scanning">Scanning page for text…</string>
     <string name="pdf_ocr_failed">Couldn’t read text on this page.</string>
