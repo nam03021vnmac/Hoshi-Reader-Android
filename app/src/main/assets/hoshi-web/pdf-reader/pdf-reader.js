@@ -30,7 +30,7 @@ const state = {
   pdf: null,
   pageCount: 0,
   zoomFactor: 1.0, // 1 = fit width
-  continuousScroll: false,
+  continuousScroll: true,
   pageSwipeThresholdPx: 72,
   fitWidthScale: 1.0,
   pages: [], // index -> page record
@@ -939,7 +939,7 @@ window.hoshiPdfReader = {
     state.opening = true;
     state.ready = false;
     state.failed = false;
-    state.continuousScroll = config.continuousScroll === true;
+    state.continuousScroll = config.continuousScroll !== false;
     state.pageSwipeThresholdPx = Number.isFinite(config.pageSwipeThresholdPx) ? Math.max(0, config.pageSwipeThresholdPx) : 72;
     state.sessionId = typeof config.sessionId === 'string' ? config.sessionId : '';
     state.ocrByPage = new Map();

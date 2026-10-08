@@ -183,6 +183,7 @@ data class ReaderBottomChromeMetrics(
     val menuItemIconBoxSizeDp: Int,
     val menuItemSpacingDp: Int,
 ) {
+    val tapAreaHeightDp: Int = buttonSizeDp + bottomPaddingDp + bottomSafeAreaDp
     val menuBottomOffsetDp: Int = buttonSizeDp + bottomPaddingDp + bottomSafeAreaDp + menuButtonGapDp
 }
 
@@ -279,6 +280,9 @@ fun readerSystemBarVisibility(focusMode: Boolean): ReaderSystemBarVisibility =
         showStatusBar = !focusMode,
         showNavigationBar = false,
     )
+
+fun readerFocusModeAfterTap(focusMode: Boolean, isBottomSafeArea: Boolean): Boolean =
+    if (isBottomSafeArea) !focusMode else true
 
 fun readerChromeVisibility(
     focusMode: Boolean,

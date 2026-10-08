@@ -125,6 +125,26 @@ JSON report in the target app's cache and logs its path with `PdfOcrBenchmark`.
 Require the final instrumentation `OK` summary. Generated fixtures do not replace
 the labeled-page accuracy/device latency gates in `docs/OCR_ARCHITECTURE.md`.
 
+For a supplied labeled scan corpus, place PDFs and `manifest.json` in the debug
+app's private `cache/ocr-corpus/` directory (use `adb shell run-as
+moe.antimony.hoshi.debug` for data-preserving fixture transfer). No imported book
+directory is read. The manifest uses this shape; text is verbatim page-level
+canonical truth in reading order, including punctuation and paragraph separators:
+
+```json
+{"pages":[{"id":"page-1","bookId":"held-out-book","pdf":"scan.pdf","pageIndex":0,"canonicalText":"本文\n次の段落"}]}
+```
+
+Run `PdfOcrCorpusBenchmarkTest` with `-e ocrCorpus true -e ocrRuns 5 -e ocrThreads 4
+-e ocrBatch 1`. It reports separate normal/high-detail raster, inference, layout
+and total times, actual dimensions/DPI and code-point CER in a unique cache JSON
+file. Paths must remain inside the fixture directory. Exclude `warmup` rows when
+computing warm p50/p95; `coldModel` marks the first model load. Compare per-page
+accuracy as well as pooled edits/reference counts; keep books separated when
+calibrating versus evaluating thresholds. This is the native pipeline benchmark,
+not end-to-end WebView installation latency or peak-memory measurement. Reports
+omit recognized/reference text; corpus IDs should not contain private book titles.
+
 Manually verify visible-page priority during rapid scrolling, revisit/reopen of
 long PDFs without whole-book cache loading, cancellation/deletion, blank pages
 settling without retry loops, low-confidence high-detail retries, native and

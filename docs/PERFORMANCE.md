@@ -149,6 +149,12 @@ Check first entry and expanded book lists as well as the warm three-card case.
   Synthetic fixtures and emulator results are engineering checks, not evidence
   for printed-book CER or real-device product latency. Use book-separated labeled
   scans for those acceptance claims, retaining punctuation and separate ruby truth.
+- `PdfOcrCorpusBenchmarkTest` accepts an explicitly supplied private-cache PDF
+  corpus and verbatim canonical labels, measures both raster budgets, and emits
+  per-page code-point CER and stage timings. See `docs/VALIDATION.md` for its
+  manifest/opt-in contract. Never substitute synthetic or unlabeled results for
+  the held-out accuracy gate. Native timings exclude WebView installation and
+  do not establish incremental peak-memory limits.
 - Benchmark batches 1/2/4 and CPU threads 1/2/4 before changing production defaults.
   Large CTC outputs must remain bounded; do not use input tensor size alone as
   the batch memory budget. XNNPACK owns its own threads; the ORT intra-op pool

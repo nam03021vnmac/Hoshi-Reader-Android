@@ -285,9 +285,9 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   no extra font-size overlap strip.
 - PDF books read through a separate Android-only WebView reader backed by the
   vendored offline pdf.js runtime under `app/src/main/assets/hoshi-web/pdfjs`.
-  It defaults to single-page viewing with horizontal swipe page turns (at
-  fit-width or smaller zoom); Appearance saves an independent profile-scoped
-  continuous-scroll preference. Both modes render a lazy page window with
+  It defaults to continuous scrolling; Appearance offers single-page viewing
+  with horizontal swipe page turns (at fit-width or smaller zoom) and saves an
+  independent profile-scoped PDF preference. Both modes render a lazy page window with
   fit-width/button/pinch zoom, persist the
   page index through the shared bookmark sidecar, and reuses the shared reader
   chrome (title/progress bubble, bottom menu, focus mode, system bars, volume

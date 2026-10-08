@@ -651,9 +651,9 @@ class ReaderSettingsRepositoryTest {
     }
 
     @Test
-    fun pdfModeDefaultsToSinglePageAndPersistsIndependentlyOfEpubMode() = runBlocking {
+    fun pdfModeDefaultsToContinuousScrollAndPersistsIndependentlyOfEpubMode() = runBlocking {
         repository().use { repository ->
-            assertFalse(repository.settings.first().pdfContinuousScroll)
+            assertTrue(repository.settings.first().pdfContinuousScroll)
             repository.update { it.copy(viewMode = ReaderViewMode.VisualNovel, pdfContinuousScroll = true) }
             assertTrue(repository.settings.first().pdfContinuousScroll)
             assertEquals(ReaderViewMode.VisualNovel, repository.settings.first().viewMode)
@@ -664,18 +664,18 @@ class ReaderSettingsRepositoryTest {
     }
 
     @Test
-    fun legacyProfileDefaultsToSinglePageAndSavedPdfModeSurvivesReopening() = runBlocking {
+    fun legacyProfileDefaultsToContinuousScrollAndSavedSinglePageModeSurvivesReopening() = runBlocking {
         val profiles = ProfileRepository(tempFolder.newFolder("pdf-profiles"))
         val file = profiles.readerSettingsFile()
         file.parentFile?.mkdirs()
         file.writeText("""{"continuousMode":true}""")
         repository(profileRepository = profiles).use { repository ->
-            assertFalse(repository.settings.first().pdfContinuousScroll)
+            assertTrue(repository.settings.first().pdfContinuousScroll)
             assertEquals(ReaderViewMode.Continuous, repository.settings.first().viewMode)
-            repository.update { it.copy(pdfContinuousScroll = true) }
+            repository.update { it.copy(pdfContinuousScroll = false) }
         }
         repository(profileRepository = profiles, fileName = "pdf-reopened.preferences_pb").use { repository ->
-            assertTrue(repository.settings.first().pdfContinuousScroll)
+            assertFalse(repository.settings.first().pdfContinuousScroll)
             assertEquals(ReaderViewMode.Continuous, repository.settings.first().viewMode)
         }
     }

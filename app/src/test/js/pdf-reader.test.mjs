@@ -290,7 +290,7 @@ function reader({ count = 12, pendingRender = false, pendingText = false, texts 
 
 test('initial restore sizes every placeholder and renders only the nearby page window', async () => {
   const r = reader();
-  await r.api.open({ pageIndex: 7, continuousScroll: true });
+  await r.api.open({ pageIndex: 7 });
   await r.flush();
   assert.equal(r.root.children.length, 12);
   assert.ok(r.root.children.every((page) => page.offsetWidth === 600 && page.offsetHeight === 800));
@@ -314,9 +314,9 @@ function ocrPayload(pageIndex = 0, revisionId = 'old', requestId = 1, text = 'çŒ
   };
 }
 
-test('single page is the default; switching modes preserves page and zoom', async () => {
+test('explicit single-page mode and switching modes preserve page and zoom', async () => {
   const r = reader();
-  await r.api.open({ pageIndex: 7 });
+  await r.api.open({ pageIndex: 7, continuousScroll: false });
   await r.flush();
   const shown = () => r.root.children.filter(page => page.style.display !== 'none');
   assert.deepEqual(shown(), [r.root.children[7]]);
@@ -340,7 +340,7 @@ test('single page is the default; switching modes preserves page and zoom', asyn
 
 test('single-page swipes turn pages, respect boundaries, and do not hijack zoom or continuous scroll', async () => {
   const r = reader({ count: 3 });
-  await r.api.open();
+  await r.api.open({ continuousScroll: false });
   await r.flush();
   const swipe = (dx, dy = 0) => {
     r.viewport.dispatch('touchstart', { touches: [{ clientX: 300, clientY: 300 }] });
@@ -397,7 +397,7 @@ test('OCR replacement waits for native selection and acknowledges the installed 
 
 test('prefetched OCR waits until its single page is visible before fitting the overlay', async () => {
   const r = reader({ texts: [] });
-  await r.api.open({ sessionId: 'ocr-test' });
+  await r.api.open({ sessionId: 'ocr-test', continuousScroll: false });
   await r.flush();
   assert.equal(r.ocr.applyOcr(ocrPayload(1)), true);
   assert.equal(r.messages.some(m => m.type === 'ocrInstalled' && m.pageIndex === 1), false);

@@ -7,9 +7,9 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import moe.antimony.hoshi.epub.BookWorkRegistry
 import moe.antimony.hoshi.ocr.layout.JapaneseOcrPostprocessor
@@ -21,6 +21,28 @@ import org.junit.runner.RunWith
 /** Generated PDFs/cache only; validates native raster lifetimes without opening installed books. */
 @RunWith(AndroidJUnit4::class)
 class PdfOcrRepositoryDeviceTest {
+    @Test fun simultaneousRequestsShareOneRasterAndInference() = runBlocking {
+        val fixture = fixture()
+        try {
+            val engine = FakeEngine().apply { block = true }
+            val repository = PdfOcrRepository(PdfOcrRasterizer(Dispatchers.IO), engine,
+                JapaneseOcrPostprocessor(), PdfOcrStore(File(fixture.root, "ocr"), Dispatchers.IO),
+                BookWorkRegistry(), Dispatchers.IO)
+            val hash = repository.sourceHashFor(fixture.pdf)!!
+            suspend fun page() = repository.ocrPage(fixture.pdf, fixture.root, hash, 0,
+                595 * (96.0 / 72), 842 * (96.0 / 72), false)
+            val first = async { page() }
+            engine.entered.await()
+            val duplicate = async(start = CoroutineStart.UNDISPATCHED) { page() }
+            engine.release.complete(Unit)
+            val a = first.await() as PdfOcrResult.Ready
+            val b = duplicate.await() as PdfOcrResult.Ready
+            assertEquals(a.record.revisionId, b.record.revisionId)
+            assertEquals(1, engine.calls)
+            assertTrue(engine.lastBitmap!!.isRecycled)
+        } finally { fixture.root.deleteRecursively() }
+    }
+
     @Test fun cacheRetryAndPinsUseTheExpectedRevisionAndRasterDetail() = runBlocking {
         val fixture = fixture()
         try {
@@ -94,12 +116,13 @@ class PdfOcrRepositoryDeviceTest {
         var block = false
         var finished = false
         val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
         override suspend fun recognize(bitmap: Bitmap): OcrRecognizeOutcome {
             calls++
             lastBitmap = bitmap
             entered.complete(Unit)
             try {
-                if (block) awaitCancellation()
+                if (block) release.await()
                 return OcrRecognizeOutcome.Success(OcrRawResult(
                     listOf(OcrRawLine("line", "猫", OcrPixelQuad(10f, 10f, 100f, 10f, 100f, 50f, 10f, 50f),
                         OcrDirection.HORIZONTAL, 0.9f)), bitmap.width, bitmap.height,

@@ -535,6 +535,7 @@ internal fun ReaderBottomSafeProgress(
     onSasayakiTogglePlayback: () -> Unit,
     onSasayakiSkipForward: () -> Unit,
     modifier: Modifier = Modifier,
+    expandedTapArea: Boolean = false,
 ) {
     val progress = readerBottomSafeProgressText(
         state = state,
@@ -545,13 +546,51 @@ internal fun ReaderBottomSafeProgress(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(metrics.bottomSafeAreaDp.dp),
+            .height((if (expandedTapArea) metrics.tapAreaHeightDp else metrics.bottomSafeAreaDp).dp),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .clickable(onClick = onTapSafeArea),
+                .then(
+                    if (expandedTapArea) {
+                        Modifier.clickable(
+                            interactionSource = null,
+                            indication = null,
+                            onClick = onTapSafeArea,
+                        )
+                    } else {
+                        Modifier.clickable(onClick = onTapSafeArea)
+                    },
+                ),
         )
+        ReaderBottomSafeInfo(
+            progress = progress,
+            colors = colors,
+            sasayakiPlaybackControls = sasayakiPlaybackControls,
+            sasayakiPlaying = sasayakiPlaying,
+            onSasayakiSkipBackward = onSasayakiSkipBackward,
+            onSasayakiTogglePlayback = onSasayakiTogglePlayback,
+            onSasayakiSkipForward = onSasayakiSkipForward,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(metrics.bottomSafeAreaDp.dp),
+        )
+    }
+}
+
+@Composable
+private fun ReaderBottomSafeInfo(
+    progress: String,
+    colors: ReaderChromeColors,
+    sasayakiPlaybackControls: ReaderSasayakiBottomPlaybackControls,
+    sasayakiPlaying: Boolean,
+    onSasayakiSkipBackward: () -> Unit,
+    onSasayakiTogglePlayback: () -> Unit,
+    onSasayakiSkipForward: () -> Unit,
+    modifier: Modifier,
+) {
+    Box(modifier = modifier) {
         if (sasayakiPlaybackControls.visible) {
             Row(
                 modifier = Modifier

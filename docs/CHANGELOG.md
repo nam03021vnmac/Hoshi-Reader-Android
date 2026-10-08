@@ -11,8 +11,8 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
 - Import and read PDF books alongside EPUB, from files, folders, or shared PDF
   documents. PDF books render through the bundled offline reader with restored
   page position, the shared EPUB-style chrome with focus mode and menu, a
-  Contents sheet with page slider and PDF chapter outline, single-page viewing
-  by default with swipe page turns and a saved continuous-scroll option in
+  Contents sheet with page slider and PDF chapter outline, continuous scrolling
+  by default with a saved single-page option and swipe page turns in
   Appearance alongside zoom controls, volume-key page turning, tap lookup with
   recursive popups, highlights, reading statistics, bookshelf covers, and PDF
   export. Scanned pages without selectable text can be read with on-device
@@ -28,7 +28,10 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
   line bounds to keep selection highlights aligned. Tapping another word outside an open lookup
   popup, including on the same text line, starts a new lookup. Vertical OCR
   columns anchor the popup to the whole selection and open it to the side so it
-  does not cover the selected text. Theme, Statistics
+  does not cover the selected text. Reveal PDF title and navigation controls only
+  by tapping the bottom area covering the navigation row and safe-area strip,
+  without a tap highlight; other blank taps no longer bring the controls back.
+  EPUB tap behavior is unchanged. Theme, Statistics
   menu entries, book search, and Sasayaki audiobook matching remain EPUB-only.
 - Add a Sasayaki setting that starts audiobook playback from the double-tapped reader line
   and keeps playing forward, without flashing a dictionary popup. While this setting is

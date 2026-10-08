@@ -252,12 +252,6 @@ internal fun PdfReaderWebView(
         focusMode = true
         showReaderMenu = false
     }
-    fun toggleFocusMode() {
-        focusMode = !focusMode
-        if (focusMode) {
-            showReaderMenu = false
-        }
-    }
     fun handleBackNavigation(): Boolean {
         if (focusMode) {
             focusMode = false
@@ -637,15 +631,17 @@ internal fun PdfReaderWebView(
         }
     }
 
-    fun handleReaderTapOutside() {
+    fun handleReaderTap(isBottomSafeArea: Boolean) {
         if (lookupPopups.isEmpty()) {
             rootSelectionHighlight = null
             webView?.evaluateJavascript(ReaderSelectionCommand.ClearSelection.source, null)
-            toggleFocusMode()
+            focusMode = readerFocusModeAfterTap(focusMode, isBottomSafeArea)
+            if (focusMode) showReaderMenu = false
         } else {
             closeLookupPopupsAndSelection()
         }
     }
+    fun handleReaderTapOutside() = handleReaderTap(isBottomSafeArea = false)
 
     // ---- Highlights ----------------------------------------------------------
     fun pushHighlightsToPage(nextHighlights: List<ReaderHighlight>) {
@@ -1181,7 +1177,8 @@ internal fun PdfReaderWebView(
                 horizontalPaddingDp = 0,
             ),
             sasayakiPlaying = false,
-            onTapSafeArea = ::handleReaderTapOutside,
+            onTapSafeArea = { handleReaderTap(isBottomSafeArea = true) },
+            expandedTapArea = true,
             onSasayakiSkipBackward = {},
             onSasayakiTogglePlayback = {},
             onSasayakiSkipForward = {},

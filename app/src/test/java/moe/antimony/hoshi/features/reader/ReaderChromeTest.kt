@@ -639,7 +639,16 @@ class ReaderChromeTest {
         assertEquals(18, metrics.bottomSafeAreaDp)
         assertEquals(8, metrics.menuButtonGapDp)
         assertEquals(72, metrics.menuBottomOffsetDp)
+        assertEquals(64, metrics.tapAreaHeightDp)
         assertEquals(ReaderContentChromeInsets(topDp = 34, bottomDp = 18), readerContentChromeInsets())
+    }
+
+    @Test
+    fun pdfChromeIsRevealedOnlyByBottomAreaTaps() {
+        assertTrue(readerFocusModeAfterTap(focusMode = false, isBottomSafeArea = false))
+        assertTrue(readerFocusModeAfterTap(focusMode = true, isBottomSafeArea = false))
+        assertTrue(readerFocusModeAfterTap(focusMode = false, isBottomSafeArea = true))
+        assertFalse(readerFocusModeAfterTap(focusMode = true, isBottomSafeArea = true))
     }
 
     @Test
@@ -650,6 +659,11 @@ class ReaderChromeTest {
         assertEquals(18, defaultMetrics.bottomSafeAreaDp)
         assertEquals(40, customMetrics.bottomSafeAreaDp)
         assertEquals(defaultMetrics.menuBottomOffsetDp + 22, customMetrics.menuBottomOffsetDp)
+        assertEquals(86, customMetrics.tapAreaHeightDp)
+        assertEquals(
+            customMetrics.buttonSizeDp + customMetrics.bottomPaddingDp + customMetrics.bottomSafeAreaDp,
+            customMetrics.tapAreaHeightDp,
+        )
     }
 
     @Test
