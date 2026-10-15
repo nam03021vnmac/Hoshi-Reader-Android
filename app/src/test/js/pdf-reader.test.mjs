@@ -703,7 +703,47 @@ test('double-tap on blank areas toggles fit-width and 2.5x at the tap point whil
   assert.equal(r.viewport.scrollLeft, 0);
   assert.equal(r.viewport.scrollTop, 0);
   assert.equal(taps().length, 5);
+  r.runTimers();
   assert.equal(r.pendingTimers, 0);
+  assert.equal(taps().length, 5);
+});
+
+test('double-tap zoom animates from the old page box to the committed layout and touches cancel it', async () => {
+  const r = reader();
+  await r.api.open();
+  await r.flush();
+  const transforms = [];
+  let transform = '';
+  Object.defineProperty(r.root.style, 'transform', {
+    get: () => transform,
+    set: (value) => { transforms.push(value); transform = value; },
+  });
+  const tap = (x, y) => {
+    const touch = { clientX: x, clientY: y };
+    r.viewport.dispatch('touchstart', { touches: [touch] });
+    r.viewport.dispatch('touchend', { touches: [], changedTouches: [touch] });
+  };
+  tap(300, 400);
+  tap(300, 400);
+  // Committed: page 0 is 1500px wide at offset (0, 8), scrolled to (450, 588).
+  // The start transform maps it back onto its old 600px box at (0, 8).
+  const [start, end] = transforms.slice(-2);
+  const [, tx, ty, ratio] = start.match(/^translate\(([-\d.]+)px, ([-\d.]+)px\) scale\(([\d.]+)\)$/).map(Number);
+  assert.equal(ratio, 0.4);
+  assert.equal(tx, 450);
+  assert.ok(Math.abs(ty - (8 + 588 - 8 * 0.4)) < 1e-9);
+  assert.equal(end, 'none');
+  assert.equal(r.root.style.transformOrigin, '0 0');
+  assert.match(r.root.style.transition, /^transform 220ms /);
+  assert.equal(r.pendingTimers, 1);
+
+  // A new touch snaps to the committed layout before hit-testing.
+  r.viewport.dispatch('touchstart', { touches: [{ clientX: 10, clientY: 10 }] });
+  assert.equal(r.root.style.transform, '');
+  assert.equal(r.root.style.transition, '');
+  assert.equal(r.pendingTimers, 0);
+  assert.equal(r.viewport.scrollLeft, 450);
+  assert.equal(r.viewport.scrollTop, 588);
 });
 
 test('double-tap toggles a narrower page between its own fit width and 2.5x, anchored on that page', async () => {

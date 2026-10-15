@@ -23,6 +23,7 @@ const DOUBLE_TAP_TIMEOUT_MS = 300;
 const DOUBLE_TAP_SLOP_PX = 100;
 // Relative to the tapped page's own fit width.
 const DOUBLE_TAP_ZOOM = 2.5;
+const ZOOM_ANIMATION_MS = 220;
 const MAX_CANVAS_PIXELS = 4 * 1024 * 1024;
 const MAX_CANVAS_DIMENSION = 8192;
 
@@ -638,23 +639,72 @@ function pageIndexAt(point) {
 // width moves horizontally by a different amount than the current page.
 // `alignPage` snaps the anchor page's left edge to the viewport instead of
 // keeping the focal x, so a page zoomed to its fit width fills the screen.
-function zoomAtPoint(factor, focal, { alignPage = false } = {}) {
+function zoomAtPoint(factor, focal, { alignPage = false, animate = false } = {}) {
   if (!Number.isFinite(factor) || !state.pdf || state.opening) return;
   const contentFocalX = viewport.scrollLeft + focal.x;
   const contentFocalY = viewport.scrollTop + focal.y;
   const anchorDiv = state.pages[pageIndexAt(focal)]?.div;
   const fractionX = anchorDiv ? (contentFocalX - anchorDiv.offsetLeft) / anchorDiv.offsetWidth : 0;
   const fractionY = anchorDiv ? (contentFocalY - anchorDiv.offsetTop) / anchorDiv.offsetHeight : 0;
-  state.zoomFactor = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor));
-  renderScaleChanged();
-  if (anchorDiv) {
-    viewport.scrollLeft = alignPage
-      ? Math.max(0, anchorDiv.offsetLeft)
-      : Math.max(0, anchorDiv.offsetLeft + fractionX * anchorDiv.offsetWidth - focal.x);
-    viewport.scrollTop = Math.max(0, anchorDiv.offsetTop + fractionY * anchorDiv.offsetHeight - focal.y);
-  }
+  const commit = () => {
+    state.zoomFactor = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor));
+    renderScaleChanged();
+    if (anchorDiv) {
+      viewport.scrollLeft = alignPage
+        ? Math.max(0, anchorDiv.offsetLeft)
+        : Math.max(0, anchorDiv.offsetLeft + fractionX * anchorDiv.offsetWidth - focal.x);
+      viewport.scrollTop = Math.max(0, anchorDiv.offsetTop + fractionY * anchorDiv.offsetHeight - focal.y);
+    }
+  };
+  if (animate) animateZoom(anchorDiv, commit);
+  else commit();
   onScroll();
   postMessage({ type: 'zoomChanged', zoomFactor: state.zoomFactor });
+}
+
+// --- Zoom animation -------------------------------------------------------------
+
+let zoomAnimationTimer = null;
+
+function finishZoomAnimation() {
+  if (zoomAnimationTimer === null) return;
+  clearTimeout(zoomAnimationTimer);
+  zoomAnimationTimer = null;
+  pagesRoot.style.transition = '';
+  pagesRoot.style.transform = '';
+  pagesRoot.style.transformOrigin = '';
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
+}
+
+// FLIP: commit the final layout and scroll once, then start the page stack at
+// a transform that reproduces the anchor page's old on-screen box and
+// transition it to identity. Layout and canvas re-rendering happen only once,
+// and the start and end states both cover the viewport, so the transform never
+// shrinks the scrollable overflow enough to clamp the committed scroll.
+function animateZoom(anchorDiv, commit) {
+  finishZoomAnimation();
+  if (!anchorDiv || prefersReducedMotion()) {
+    commit();
+    return;
+  }
+  const beforeX = anchorDiv.offsetLeft - viewport.scrollLeft;
+  const beforeY = anchorDiv.offsetTop - viewport.scrollTop;
+  const beforeWidth = anchorDiv.offsetWidth;
+  commit();
+  const ratio = beforeWidth / Math.max(1, anchorDiv.offsetWidth);
+  if (!Number.isFinite(ratio) || ratio <= 0 || Math.abs(ratio - 1) < 0.001) return;
+  const translateX = beforeX + viewport.scrollLeft - anchorDiv.offsetLeft * ratio;
+  const translateY = beforeY + viewport.scrollTop - anchorDiv.offsetTop * ratio;
+  pagesRoot.style.transition = 'none';
+  pagesRoot.style.transformOrigin = '0 0';
+  pagesRoot.style.transform = `translate(${translateX}px, ${translateY}px) scale(${ratio})`;
+  void pagesRoot.offsetWidth; // Apply the start transform before transitioning.
+  pagesRoot.style.transition = `transform ${ZOOM_ANIMATION_MS}ms cubic-bezier(0.2, 0, 0, 1)`;
+  pagesRoot.style.transform = 'none';
+  zoomAnimationTimer = setTimeout(finishZoomAnimation, ZOOM_ANIMATION_MS);
 }
 
 function endPinch() {
@@ -680,9 +730,9 @@ function pageFitFactor(index) {
 function toggleDoubleTapZoom(point) {
   const fit = pageFitFactor(pageIndexAt(point));
   if (state.zoomFactor > fit * 1.001) {
-    zoomAtPoint(fit, point, { alignPage: true });
+    zoomAtPoint(fit, point, { alignPage: true, animate: true });
   } else {
-    zoomAtPoint(DOUBLE_TAP_ZOOM * fit, point);
+    zoomAtPoint(DOUBLE_TAP_ZOOM * fit, point, { animate: true });
   }
 }
 
@@ -1132,6 +1182,8 @@ function isTextTarget(target) {
 viewport.addEventListener(
   'touchstart',
   (event) => {
+    // Gestures hit-test and pinch-preview against the untransformed stack.
+    finishZoomAnimation();
     const touches = event.touches;
     if (touches.length === 2) {
       touchStarted = null;
