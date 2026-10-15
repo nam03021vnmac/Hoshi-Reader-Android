@@ -65,7 +65,7 @@ class PdfOcrRepository @Inject constructor(
     fun pipelineKey(model: PdfOcrModel): String =
         engines[model].let { PdfOcrPipeline.pipelineKey(it.engineId, it.engineVersion) }
 
-    fun configHash(model: PdfOcrModel, highRes: Boolean): String =
+    fun configHash(model: PdfOcrModel, highRes: Boolean = false): String =
         engines[model].let { PdfOcrPipeline.configHash(it.engineId, it.engineVersion, highRes) }
 
     override suspend fun ocrModelFor(bookRoot: File?): PdfOcrModel = modelSource.modelFor(bookRoot)
@@ -88,6 +88,7 @@ class PdfOcrRepository @Inject constructor(
 
     override suspend fun cachedPage(sourceHash: String, pageIndex: Int, model: PdfOcrModel): OcrPageRecord? {
         val engine = engines[model]
+        // Records from the removed high-detail retry remain valid results for the same engine.
         return store.pinnedPage(sourceHash, pageIndex) ?: store.loadActive(sourceHash, pipelineKey(model), pageIndex)?.takeIf {
             it.pipelineVersion == PdfOcrPipeline.VERSION && it.engineId == engine.engineId &&
                 it.engineVersion == engine.engineVersion && it.configHash == configHash(model, it.rasterPlan.highRes)
@@ -103,7 +104,6 @@ class PdfOcrRepository @Inject constructor(
         pageIndex: Int,
         cssWidth: Double,
         cssHeight: Double,
-        highRes: Boolean,
         model: PdfOcrModel,
         force: Boolean,
         onStage: (PdfOcrStage) -> Unit,
@@ -112,7 +112,7 @@ class PdfOcrRepository @Inject constructor(
         var owner = false
         val request = jobsMutex.withLock {
             inFlight[requestKey] ?: async(start = CoroutineStart.LAZY) {
-                runPage(pdfFile, bookRoot, sourceHash, pageIndex, cssWidth, cssHeight, highRes, model, force, onStage)
+                runPage(pdfFile, bookRoot, sourceHash, pageIndex, cssWidth, cssHeight, model, force, onStage)
             }.also {
                 inFlight[requestKey] = it
                 owner = true
@@ -137,7 +137,6 @@ class PdfOcrRepository @Inject constructor(
         pageIndex: Int,
         cssWidth: Double,
         cssHeight: Double,
-        highRes: Boolean,
         model: PdfOcrModel,
         force: Boolean,
         onStage: (PdfOcrStage) -> Unit,
@@ -154,7 +153,7 @@ class PdfOcrRepository @Inject constructor(
             return@withContext PdfOcrResult.Unavailable("Pinned OCR revision unavailable")
         }
         if (!force) timings.measure("cache") { cachedPage(sourceHash, pageIndex, model) }?.let { cached ->
-            if (!highRes || cached.rasterPlan.highRes) return@withContext resultFor(cached)
+            return@withContext resultFor(cached)
         }
         ensureActive()
         // Bound the entire bitmap lifetime, including raster and postprocessing.
@@ -166,9 +165,9 @@ class PdfOcrRepository @Inject constructor(
         }
         ensureActive()
         onStage(PdfOcrStage.Rasterizing)
-        val raster = timings.measure("raster") { rasterizer.rasterize(pdfFile, pageIndex, highRes) }
+        val raster = timings.measure("raster") { rasterizer.rasterize(pdfFile, pageIndex) }
             ?: run {
-                Log.w(PdfOcrTag, "rasterize failed page=$pageIndex highRes=$highRes")
+                Log.w(PdfOcrTag, "rasterize failed page=$pageIndex")
                 return@withContext PdfOcrResult.Failed("Could not render PDF page", retryable = true)
             }
         try {
@@ -232,7 +231,7 @@ class PdfOcrRepository @Inject constructor(
                         engineId = engine.engineId,
                         engineVersion = engine.engineVersion,
                         pipelineVersion = PdfOcrPipeline.VERSION,
-                        configHash = configHash(model, highRes),
+                        configHash = configHash(model),
                         pageGeometry = OcrPageGeometryRecord(
                             nativeWidthPt = raster.nativeWidthPt,
                             nativeHeightPt = raster.nativeHeightPt,
@@ -243,7 +242,6 @@ class PdfOcrRepository @Inject constructor(
                             dpi = raster.dpi,
                             bitmapWidth = raster.bitmap.width,
                             bitmapHeight = raster.bitmap.height,
-                            highRes = highRes,
                         ),
                         revisionId = revisionId,
                         status = if (processed.canonicalText.isBlank()) "NoText" else "OcrReady",
@@ -270,7 +268,7 @@ class PdfOcrRepository @Inject constructor(
         }
         } finally {
             enginePermits.release()
-            Log.d(PdfOcrTag, "timing page=$pageIndex model=$model highRes=$highRes ${timings.summary()}")
+            Log.d(PdfOcrTag, "timing page=$pageIndex model=$model ${timings.summary()}")
         }
     }
 

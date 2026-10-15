@@ -890,9 +890,9 @@ internal fun PdfReaderWebView(
             if (result == SnackbarResult.ActionPerformed) {
                 val geometry = currentPageOcrState.record?.pageGeometry
                 if (geometry != null && geometry.cssWidth > 0 && geometry.cssHeight > 0) {
-                    ocrViewModel.retryWithProbe(pageIndex, geometry.cssWidth, geometry.cssHeight, highRes = false)
+                    ocrViewModel.retryWithProbe(pageIndex, geometry.cssWidth, geometry.cssHeight)
                 } else {
-                    ocrViewModel.retry(pageIndex, highRes = false)
+                    ocrViewModel.retry(pageIndex)
                 }
             }
         }
@@ -1211,28 +1211,19 @@ internal fun PdfReaderWebView(
                 if (geometry != null && geometry.cssWidth > 0 && geometry.cssHeight > 0) {
                     ocrViewModel.useOcrForSuspect(pageIndex, geometry.cssWidth, geometry.cssHeight)
                 } else {
-                    ocrViewModel.retry(pageIndex, highRes = false)
+                    ocrViewModel.retry(pageIndex)
                 }
             },
             onKeepText = { ocrViewModel.useEmbedded(pageIndex) },
-            onRetryHighRes = {
-                val geometry = currentPageOcrState?.record?.pageGeometry
-                if (geometry != null && geometry.cssWidth > 0 && geometry.cssHeight > 0) {
-                    ocrViewModel.retryWithProbe(pageIndex, geometry.cssWidth, geometry.cssHeight, highRes = true)
-                } else {
-                    ocrViewModel.retry(pageIndex, highRes = true)
-                }
-            },
             onRetry = {
                 val geometry = currentPageOcrState?.record?.pageGeometry
                 if (geometry != null && geometry.cssWidth > 0 && geometry.cssHeight > 0) {
-                    ocrViewModel.retryWithProbe(pageIndex, geometry.cssWidth, geometry.cssHeight, highRes = false)
+                    ocrViewModel.retryWithProbe(pageIndex, geometry.cssWidth, geometry.cssHeight)
                 } else {
-                    ocrViewModel.retry(pageIndex, highRes = false)
+                    ocrViewModel.retry(pageIndex)
                 }
             },
             modifier = Modifier.align(Alignment.TopCenter).padding(top = topInfoPadding + 48.dp),
-            highDetailModifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp),
         )
         SnackbarHost(
             hostState = ocrSnackbarHostState,

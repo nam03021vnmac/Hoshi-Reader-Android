@@ -52,7 +52,7 @@ class PdfOcrViewModelTest {
         vm.attachBook(File("manga.pdf"), mangaRoot, 10)
         vm.onTextProbe(probe(0))
         advanceUntilIdle()
-        vm.retry(0, highRes = true)
+        vm.retry(0)
         advanceUntilIdle()
         assertEquals(listOf(PdfOcrModel.Manga, PdfOcrModel.Manga), repository.calls.map { it.model })
 
@@ -68,12 +68,11 @@ class PdfOcrViewModelTest {
         vm.attachBook(File("book.pdf"), null, 10)
         vm.onTextProbe(probe(0))
         advanceUntilIdle()
-        vm.retry(0, highRes = true)
+        vm.retry(0)
         advanceUntilIdle()
         val retry = repository.calls.last()
-        assertTrue(retry.force && retry.highRes)
+        assertTrue(retry.force)
         assertEquals(600.0, retry.width, 0.0)
-        assertTrue(vm.uiState.value.page(0).highResUsed)
     }
 
     @Test fun explicitRetryRecoversFromTransientSourceHashFailure() = runTest(dispatcher) {
@@ -145,7 +144,7 @@ class PdfOcrViewModelTest {
         advanceUntilIdle()
         assertEquals("displayed-old", repository.pinRevision)
         assertTrue(vm.uiState.value.page(0).revisionLocked)
-        vm.retry(0, true)
+        vm.retry(0)
         advanceUntilIdle()
         assertEquals(1, repository.calls.size)
         repository.pinSucceeds = false
@@ -155,7 +154,7 @@ class PdfOcrViewModelTest {
         assertNotNull(vm.uiState.value.page(0).error)
     }
 
-    private data class Call(val page: Int, val width: Double, val highRes: Boolean, val force: Boolean,
+    private data class Call(val page: Int, val width: Double, val force: Boolean,
         val model: PdfOcrModel = PdfOcrModel.Standard)
 
     private class FakeRepository : PdfOcrReaderRepository {
@@ -178,9 +177,9 @@ class PdfOcrViewModelTest {
         override suspend fun hasPinnedPage(sourceHash: String, pageIndex: Int): Boolean = pinRevision != null
         override suspend fun cachedPage(sourceHash: String, pageIndex: Int, model: PdfOcrModel): OcrPageRecord? = null
         override suspend fun ocrPage(pdfFile: File, bookRoot: File?, sourceHash: String, pageIndex: Int,
-            cssWidth: Double, cssHeight: Double, highRes: Boolean, model: PdfOcrModel, force: Boolean,
+            cssWidth: Double, cssHeight: Double, model: PdfOcrModel, force: Boolean,
             onStage: (PdfOcrStage) -> Unit): PdfOcrResult {
-            calls += Call(pageIndex, cssWidth, highRes, force, model)
+            calls += Call(pageIndex, cssWidth, force, model)
             if (blockFirst && calls.size == 1) awaitCancellation()
             onStage(PdfOcrStage.Rasterizing)
             onStage(PdfOcrStage.Recognizing)
@@ -188,7 +187,7 @@ class PdfOcrViewModelTest {
             return result ?: PdfOcrResult.Ready(OcrPageRecord(
                 sourceSha256 = sourceHash, pageIndex = pageIndex, engineId = "fixture", engineVersion = "1", configHash = "fixture",
                 pageGeometry = OcrPageGeometryRecord(450, 600, cssWidth, cssHeight),
-                rasterPlan = OcrRasterPlanRecord(200, 100, 100, highRes), revisionId = "r${calls.size}", status = "OcrReady",
+                rasterPlan = OcrRasterPlanRecord(200, 100, 100), revisionId = "r${calls.size}", status = "OcrReady",
                 rawObservations = emptyList(), paragraphs = emptyList(), canonicalText = "猫", spans = listOf(OcrSpanRecord("l", 0, 1)),
             ))
         }

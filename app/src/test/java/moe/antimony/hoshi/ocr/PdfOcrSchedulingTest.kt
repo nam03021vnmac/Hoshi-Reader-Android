@@ -34,22 +34,19 @@ class PdfOcrSchedulingTest {
         assertFalse(queue.isNearby(50))
     }
 
-    @Test fun highDetailA4RetryActuallyIncreasesSourceResolutionWithinBudget() {
-        val normal = PdfOcrRasterPlan.create(595, 842, false)
-        val high = PdfOcrRasterPlan.create(595, 842, true)
-        assertTrue(high.width > normal.width && high.height > normal.height)
-        assertTrue(normal.width.toLong() * normal.height <= 3_000_000L)
-        assertTrue(high.width.toLong() * high.height <= 6_000_000L)
-        assertTrue(high.scale > normal.scale)
+    @Test fun a4RasterStaysWithinPixelBudget() {
+        val plan = PdfOcrRasterPlan.create(595, 842)
+        assertTrue(plan.width.toLong() * plan.height <= 3_000_000L)
+        assertTrue(plan.scale < 200 / 72f)
     }
 
     @Test fun smallPagesKeepRequestedDpiAndExtremePagesRemainBounded() {
-        val small = PdfOcrRasterPlan.create(72, 72, true)
-        assertEquals(300, small.width)
+        val small = PdfOcrRasterPlan.create(72, 72)
+        assertEquals(200, small.width)
         for (size in listOf(100_000 to 100_000, 1 to 100_000)) {
-            val plan = PdfOcrRasterPlan.create(size.first, size.second, true)
+            val plan = PdfOcrRasterPlan.create(size.first, size.second)
             assertTrue(plan.width > 0 && plan.height > 0)
-            assertTrue(plan.width.toLong() * plan.height <= 6_000_000L)
+            assertTrue(plan.width.toLong() * plan.height <= 3_000_000L)
         }
     }
 }

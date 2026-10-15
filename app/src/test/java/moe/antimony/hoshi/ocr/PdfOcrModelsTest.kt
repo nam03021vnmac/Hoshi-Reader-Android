@@ -63,11 +63,12 @@ class PdfOcrModelsTest {
     }
 
     @Test
-    fun configHashDistinguishesHighResAndEngine() {
-        val base = PdfOcrPipeline.configHash("paddle-ppocrv6-small", "20260618", false)
-        val highRes = PdfOcrPipeline.configHash("paddle-ppocrv6-small", "20260618", true)
-        val otherEngine = PdfOcrPipeline.configHash("paddle", "v6", false)
-        assertEquals(false, base == highRes)
+    fun configHashKeepsExistingCacheIdentityAndDistinguishesEngine() {
+        val base = PdfOcrPipeline.configHash("paddle-ppocrv6-small", "20260618")
+        assertEquals("pdf-ocr-v2|paddle-ppocrv6-small|20260618|highRes=false", base)
+        val legacyHighRes = PdfOcrPipeline.configHash("paddle-ppocrv6-small", "20260618", true)
+        val otherEngine = PdfOcrPipeline.configHash("paddle", "v6")
+        assertEquals(false, base == legacyHighRes)
         assertEquals(false, base == otherEngine)
     }
 

@@ -25,7 +25,7 @@ import org.junit.runner.RunWith
 /** Explicit, private cache corpus only. Never traverses the user's imported books. */
 @RunWith(AndroidJUnit4::class)
 class PdfOcrCorpusBenchmarkTest {
-    @Test fun measureLabeledScansAtNormalAndHighDetail() = runBlocking {
+    @Test fun measureLabeledScans() = runBlocking {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("Explicit corpus opt-in required", args.getString("ocrCorpus") == "true")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -51,39 +51,37 @@ class PdfOcrCorpusBenchmarkTest {
                 require(reference.isNotEmpty()) { "Nonempty verbatim canonical truth is required" }
                 val pageIndex = fixture.getInt("pageIndex")
                 require(pageIndex >= 0)
-                for (highDetail in listOf(false, true)) {
-                    repeat(runs + 1) { run ->
-                        val start = System.nanoTime()
-                        val raster = requireNotNull(rasterizer.rasterize(file, pageIndex, highDetail))
-                        try {
-                            val rendered = System.nanoTime()
-                            val outcome = engine.recognize(raster.bitmap)
-                            assertTrue("Corpus inference failed", outcome is OcrRecognizeOutcome.Success)
-                            val raw = (outcome as OcrRecognizeOutcome.Success).result
-                            val inferred = System.nanoTime()
-                            val lines = raw.lines.map { line ->
-                                val q = line.quad
-                                PostprocessorInputLine(line.id, line.text, q?.let { NormalizedQuad(
-                                    q.x0 / raw.imageWidth, q.y0 / raw.imageHeight,
-                                    q.x1 / raw.imageWidth, q.y1 / raw.imageHeight,
-                                    q.x2 / raw.imageWidth, q.y2 / raw.imageHeight,
-                                    q.x3 / raw.imageWidth, q.y3 / raw.imageHeight,
-                                ) }, line.direction.name, line.confidence)
-                            }
-                            val processed = layout.process(lines, raw.imageWidth.toDouble(), raw.imageHeight.toDouble())
-                            val completed = System.nanoTime()
-                            val count = reference.codePointCount(0, reference.length)
-                            val edits = OcrAccuracy.editDistance(reference, processed.canonicalText)
-                            results.put(JSONObject().put("id", fixture.getString("id"))
-                                .put("bookId", fixture.getString("bookId")).put("pageIndex", pageIndex)
-                                .put("highDetail", highDetail).put("run", run).put("coldModel", cold)
-                                .put("warmup", run == 0).put("width", raw.imageWidth).put("height", raw.imageHeight).put("dpi", raster.dpi)
-                                .put("rasterMs", (rendered - start) / 1e6).put("inferenceMs", (inferred - rendered) / 1e6)
-                                .put("layoutMs", (completed - inferred) / 1e6).put("totalMs", (completed - start) / 1e6)
-                                .put("codePointEdits", edits).put("referenceCodePoints", count).put("cer", edits.toDouble() / count))
-                            cold = false
-                        } finally { raster.bitmap.recycle() }
-                    }
+                repeat(runs + 1) { run ->
+                    val start = System.nanoTime()
+                    val raster = requireNotNull(rasterizer.rasterize(file, pageIndex))
+                    try {
+                        val rendered = System.nanoTime()
+                        val outcome = engine.recognize(raster.bitmap)
+                        assertTrue("Corpus inference failed", outcome is OcrRecognizeOutcome.Success)
+                        val raw = (outcome as OcrRecognizeOutcome.Success).result
+                        val inferred = System.nanoTime()
+                        val lines = raw.lines.map { line ->
+                            val q = line.quad
+                            PostprocessorInputLine(line.id, line.text, q?.let { NormalizedQuad(
+                                q.x0 / raw.imageWidth, q.y0 / raw.imageHeight,
+                                q.x1 / raw.imageWidth, q.y1 / raw.imageHeight,
+                                q.x2 / raw.imageWidth, q.y2 / raw.imageHeight,
+                                q.x3 / raw.imageWidth, q.y3 / raw.imageHeight,
+                            ) }, line.direction.name, line.confidence)
+                        }
+                        val processed = layout.process(lines, raw.imageWidth.toDouble(), raw.imageHeight.toDouble())
+                        val completed = System.nanoTime()
+                        val count = reference.codePointCount(0, reference.length)
+                        val edits = OcrAccuracy.editDistance(reference, processed.canonicalText)
+                        results.put(JSONObject().put("id", fixture.getString("id"))
+                            .put("bookId", fixture.getString("bookId")).put("pageIndex", pageIndex)
+                            .put("run", run).put("coldModel", cold)
+                            .put("warmup", run == 0).put("width", raw.imageWidth).put("height", raw.imageHeight).put("dpi", raster.dpi)
+                            .put("rasterMs", (rendered - start) / 1e6).put("inferenceMs", (inferred - rendered) / 1e6)
+                            .put("layoutMs", (completed - inferred) / 1e6).put("totalMs", (completed - start) / 1e6)
+                            .put("codePointEdits", edits).put("referenceCodePoints", count).put("cer", edits.toDouble() / count))
+                        cold = false
+                    } finally { raster.bitmap.recycle() }
                 }
             }
         } finally { engine.close() }

@@ -139,9 +139,8 @@ Check first entry and expanded book lists as well as the warm three-card case.
   detection preprocessing/inference/postprocessing, crop preparation,
   recognition preprocessing/inference and decoding. WebView logs `PdfOcr`
   DOM installation time. Logs contain dimensions and timings, not source text.
-- Separate cold model load, warm uncached pages, cached pages, normal raster and
-  opt-in high-detail retries. Normal raster is capped at 3 MP; high-detail source
-  raster at 6 MP while detector input remains bounded near 3 MP. Record effective
+- Separate cold model load, warm uncached pages and cached pages. Raster is
+  capped at 3 MP and detector input remains bounded near 3 MP. Record effective
   dimensions/DPI rather than assuming a requested DPI was rendered.
 - `PaddleOcrBenchmarkTest` is an opt-in generated-Japanese fixture benchmark with
   configurable thread counts, batch sizes, and optional XNNPACK. It checks batch

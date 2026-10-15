@@ -8,8 +8,11 @@ object PdfOcrPipeline {
     const val LANGUAGE = "ja"
     const val SCHEMA_VERSION = 1
 
-    /** Exact model/runtime/postprocessor/raster identity; zoom/theme/popup never invalidate. */
-    fun configHash(engineId: String, engineVersion: String, highRes: Boolean): String =
+    /**
+     * Exact model/runtime/postprocessor/raster identity; zoom/theme/popup never invalidate.
+     * [highRes] only identifies records written by the removed high-detail retry.
+     */
+    fun configHash(engineId: String, engineVersion: String, highRes: Boolean = false): String =
         "$VERSION|$engineId|$engineVersion|highRes=$highRes"
 
     fun pipelineKey(engineId: String, engineVersion: String): String =
@@ -101,7 +104,8 @@ data class OcrRasterPlanRecord(
     val dpi: Int,
     val bitmapWidth: Int,
     val bitmapHeight: Int,
-    val highRes: Boolean,
+    /** Legacy high-detail retry marker; new records are always written with false. */
+    val highRes: Boolean = false,
 )
 
 /**

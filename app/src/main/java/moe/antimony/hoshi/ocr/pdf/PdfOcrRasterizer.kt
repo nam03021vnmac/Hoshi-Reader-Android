@@ -21,7 +21,6 @@ data class PdfOcrRasterInput(
     val nativeWidthPt: Int,
     val nativeHeightPt: Int,
     val dpi: Int,
-    val highRes: Boolean,
 )
 
 /**
@@ -39,7 +38,6 @@ class PdfOcrRasterizer @Inject constructor(
     suspend fun rasterize(
         pdfFile: File,
         pageIndex: Int,
-        highRes: Boolean,
     ): PdfOcrRasterInput? = withContext(ioDispatcher) {
         if (!pdfFile.isFile || pageIndex < 0) return@withContext null
         rendererMutex.withLock {
@@ -51,7 +49,7 @@ class PdfOcrRasterizer @Inject constructor(
                             val nativeWidth = page.width
                             val nativeHeight = page.height
                             if (nativeWidth <= 0 || nativeHeight <= 0) return@withContext null
-                            val (width, height, scale) = PdfOcrRasterPlan.create(nativeWidth, nativeHeight, highRes)
+                            val (width, height, scale) = PdfOcrRasterPlan.create(nativeWidth, nativeHeight)
                             ensureActive()
                             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                             bitmap.eraseColor(Color.WHITE)
@@ -69,7 +67,6 @@ class PdfOcrRasterizer @Inject constructor(
                                 nativeWidthPt = nativeWidth,
                                 nativeHeightPt = nativeHeight,
                                 dpi = dpi,
-                                highRes = highRes,
                             )
                         }
                     }

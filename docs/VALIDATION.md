@@ -137,9 +137,8 @@ canonical truth in reading order, including punctuation and paragraph separators
 ```
 
 Run `PdfOcrCorpusBenchmarkTest` with `-e ocrCorpus true -e ocrRuns 5 -e ocrThreads 4
--e ocrBatch 1`. It reports separate normal/high-detail raster, inference, layout
-and total times, actual dimensions/DPI and code-point CER in a unique cache JSON
-file. Paths must remain inside the fixture directory. Exclude `warmup` rows when
+-e ocrBatch 1`. It reports raster, inference, layout and total times, actual
+dimensions/DPI and code-point CER in a unique cache JSON file. Paths must remain inside the fixture directory. Exclude `warmup` rows when
 computing warm p50/p95; `coldModel` marks the first model load. Compare per-page
 accuracy as well as pooled edits/reference counts; keep books separated when
 calibrating versus evaluating thresholds. This is the native pipeline benchmark,
@@ -148,9 +147,8 @@ omit recognized/reference text; corpus IDs should not contain private book title
 
 Manually verify visible-page priority during rapid scrolling, revisit/reopen of
 long PDFs without whole-book cache loading, cancellation/deletion, blank pages
-settling without retry loops, low-confidence high-detail retries, native and
-lookup selection during retry, and pinned highlight replay across pipeline
-upgrades. A failed pin write must not commit a highlight sidecar.
+settling without retry loops, native and lookup selection during retry, and
+pinned highlight replay across pipeline upgrades. A failed pin write must not commit a highlight sidecar.
 
 ### General Fixtures
 

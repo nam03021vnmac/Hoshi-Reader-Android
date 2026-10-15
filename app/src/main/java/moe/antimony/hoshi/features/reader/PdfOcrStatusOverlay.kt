@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -13,7 +12,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import moe.antimony.hoshi.R
@@ -28,10 +26,8 @@ internal fun PdfOcrStatusOverlay(
     pageState: PdfOcrPageUiState?,
     onRunOcr: () -> Unit,
     onKeepText: () -> Unit,
-    onRetryHighRes: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
-    highDetailModifier: Modifier = Modifier,
 ) {
     when (pageState?.status) {
         PdfOcrPageStatus.Queued,
@@ -85,11 +81,6 @@ internal fun PdfOcrStatusOverlay(
         PdfOcrPageStatus.OcrReady -> {
             if (pageState.error != null) {
                 Text(pageState.error.asString(), modifier = modifier, style = MaterialTheme.typography.labelLarge)
-            } else if (!pageState.highResUsed && !pageState.revisionLocked &&
-                pageState.record?.qualityFlags?.contains("low-confidence") == true) {
-                TextButton(onClick = onRetryHighRes, modifier = highDetailModifier) {
-                    Icon(painterResource(R.drawable.wand_stars_24px), contentDescription = null)
-                }
             }
         }
         PdfOcrPageStatus.Failed -> {
@@ -114,11 +105,6 @@ internal fun PdfOcrStatusOverlay(
                     if (pageState.retryable) {
                         TextButton(onClick = onRetry) {
                             Text(stringResource(R.string.pdf_ocr_try_again))
-                        }
-                        if (!pageState.highResUsed && !pageState.revisionLocked) {
-                            TextButton(onClick = onRetryHighRes) {
-                                Icon(painterResource(R.drawable.wand_stars_24px), contentDescription = null)
-                            }
                         }
                     }
                 }

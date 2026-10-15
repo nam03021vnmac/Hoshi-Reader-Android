@@ -300,8 +300,7 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   as the page count.
 - Scanned PDF pages without usable embedded text use on-device OCR behind the
   same PDF reader. Kotlin owns raster (`PdfRenderer` at ~200 DPI capped at 3 MP,
-  opt-in 300 DPI retry capped at 6 MP, while detector input stays bounded near
-  3 MP), bundled PP-OCRv6_small Japanese recognition on
+  with detector input bounded near 3 MP), bundled PP-OCRv6_small Japanese recognition on
   ONNX Runtime (detection plus CTC recognition from build-time pinned
   official weights, no OpenCV); books on a shelf whose `shelves.json` entry
   carries the Android-only `isManga` flag instead use the bundled
@@ -330,7 +329,9 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   before paragraph ordering. Span writing direction comes from
   recognition rather than an independent WebView guess. Ruby candidates retain
   body text but carry resolved base ranges. Explicit retries bypass unpinned cache
-  records; pipeline v2 invalidates older unpinned results. OCR revisions are pinned
+  records; pipeline v2 invalidates older unpinned results. There is one raster
+  plan; records written by the removed high-detail retry (`rasterPlan.highRes`)
+  stay valid cache entries for their engine. OCR revisions are pinned
   before highlight sidecar writes, with the installed WebView revision acknowledged
   back to Kotlin. Pinned pages replay their original revision across pipeline
   upgrades and cannot be overwritten by retries. New layers wait while native

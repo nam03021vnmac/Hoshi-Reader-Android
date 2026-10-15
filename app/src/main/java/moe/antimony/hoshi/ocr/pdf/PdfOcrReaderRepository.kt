@@ -15,7 +15,6 @@ interface PdfOcrReaderRepository {
         pageIndex: Int,
         cssWidth: Double,
         cssHeight: Double,
-        highRes: Boolean,
         model: PdfOcrModel,
         force: Boolean = false,
         onStage: (PdfOcrStage) -> Unit = {},

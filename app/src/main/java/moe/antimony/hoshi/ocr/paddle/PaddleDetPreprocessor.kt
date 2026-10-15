@@ -90,7 +90,7 @@ object PaddleDetPreprocessor {
             newH = (newH * ratio).toInt()
             newW = (newW * ratio).toInt()
         }
-        // High-detail retries retain source detail for crops without doubling detector work.
+        // Bound detector work while crops keep the full source raster detail.
         if (newH.toLong() * newW > MAX_INPUT_PIXELS) {
             val pixelRatio = kotlin.math.sqrt(MAX_INPUT_PIXELS.toDouble() / (newH.toDouble() * newW))
             newH = (newH * pixelRatio).toInt()

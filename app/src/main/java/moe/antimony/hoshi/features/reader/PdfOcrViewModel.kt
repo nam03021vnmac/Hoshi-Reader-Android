@@ -50,7 +50,6 @@ data class PdfOcrPageUiState(
     val record: OcrPageRecord? = null,
     val error: UiText? = null,
     val retryable: Boolean = false,
-    val highResUsed: Boolean = false,
     val overriddenToOcr: Boolean = false,
     val requestId: Int = 0,
     val revisionLocked: Boolean = false,
@@ -87,7 +86,7 @@ internal class PdfOcrViewModel @Inject constructor(
     private var pdfFile: File? = null
     private var bookRoot: File? = null
     private var pageCount: Int = 0
-    private data class Request(val probe: PdfTextProbe, val highRes: Boolean, val force: Boolean, val id: Int)
+    private data class Request(val probe: PdfTextProbe, val force: Boolean, val id: Int)
     private val queue = PdfOcrRequestQueue<Request>()
     private var worker: Job? = null
     private var activePage: Int? = null
@@ -197,14 +196,14 @@ internal class PdfOcrViewModel @Inject constructor(
                 }
                 return
             }
-            queueOcr(pageIndex, probe, highRes = false)
+            queueOcr(pageIndex, probe)
             return
         }
         // Suspect covers replacement/private-use-heavy text or an isolated page
         // number over a scanned body; offer a page OCR action instead of replacing.
         if (probe.hasSuspectChars || probe.isSingleNumber) {
             if (current.overriddenToOcr) {
-                queueOcr(pageIndex, probe, highRes = current.highResUsed)
+                queueOcr(pageIndex, probe)
             } else {
                 _uiState.update { state ->
                     state.copy(pages = state.pages + (pageIndex to current.copy(status = PdfOcrPageStatus.Suspect, error = null, retryable = true)))
@@ -217,16 +216,15 @@ internal class PdfOcrViewModel @Inject constructor(
         }
     }
 
-    fun retry(pageIndex: Int, highRes: Boolean = false) {
+    fun retry(pageIndex: Int) {
         val probe = probes[pageIndex] ?: return
-        queueOcr(pageIndex, probe, highRes = highRes, explicitRetry = true)
+        queueOcr(pageIndex, probe, explicitRetry = true)
     }
 
-    fun retryWithProbe(pageIndex: Int, cssWidth: Double, cssHeight: Double, highRes: Boolean) {
+    fun retryWithProbe(pageIndex: Int, cssWidth: Double, cssHeight: Double) {
         queueOcr(
             pageIndex,
             PdfTextProbe(pageIndex, 0, false, false, false, cssWidth, cssHeight),
-            highRes = highRes,
             explicitRetry = true,
         )
     }
@@ -239,7 +237,6 @@ internal class PdfOcrViewModel @Inject constructor(
         queueOcr(
             pageIndex,
             PdfTextProbe(pageIndex, 0, false, false, false, cssWidth, cssHeight),
-            highRes = false,
             explicitRetry = true,
         )
     }
@@ -301,7 +298,6 @@ internal class PdfOcrViewModel @Inject constructor(
     private fun queueOcr(
         pageIndex: Int,
         probe: PdfTextProbe,
-        highRes: Boolean,
         explicitRetry: Boolean = false,
     ) {
         if (pdfFile == null || pageIndex !in 0 until pageCount || !queue.isNearby(pageIndex)) return
@@ -312,9 +308,9 @@ internal class PdfOcrViewModel @Inject constructor(
         }
         val requestId = requestCounter.incrementAndGet()
         _uiState.update { state ->
-            state.copy(pages = state.pages + (pageIndex to state.page(pageIndex).copy(status = PdfOcrPageStatus.Queued, error = null, retryable = false, requestId = requestId, highResUsed = highRes)))
+            state.copy(pages = state.pages + (pageIndex to state.page(pageIndex).copy(status = PdfOcrPageStatus.Queued, error = null, retryable = false, requestId = requestId)))
         }
-        queue.put(pageIndex, Request(probe, highRes, explicitRetry, requestId))
+        queue.put(pageIndex, Request(probe, explicitRetry, requestId))
         if (pageIndex in queue.firstVisible..queue.lastVisible &&
             activePage?.let { it !in queue.firstVisible..queue.lastVisible } == true) {
             requeueActive = true
@@ -395,7 +391,6 @@ internal class PdfOcrViewModel @Inject constructor(
                     pageIndex = pageIndex,
                     cssWidth = request.probe.cssWidth,
                     cssHeight = request.probe.cssHeight,
-                    highRes = request.highRes,
                     model = model,
                     force = request.force,
                     onStage = { stage ->
@@ -411,11 +406,11 @@ internal class PdfOcrViewModel @Inject constructor(
                 when (result) {
                     is PdfOcrResult.Ready -> {
                         updatePage { it.copy(status = PdfOcrPageStatus.OcrReady, record = result.record, error = null, retryable = false,
-                            highResUsed = result.record.rasterPlan.highRes, revisionLocked = locked) }
+                            revisionLocked = locked) }
                     }
                     is PdfOcrResult.NoText -> {
                         updatePage { it.copy(status = PdfOcrPageStatus.NoText, record = result.record, error = null, retryable = true,
-                            highResUsed = result.record.rasterPlan.highRes, revisionLocked = locked) }
+                            revisionLocked = locked) }
                     }
                     is PdfOcrResult.Failed -> {
                         updatePage { it.copy(status = PdfOcrPageStatus.Failed, error = UiText.Resource(R.string.pdf_ocr_failed), retryable = result.retryable) }
