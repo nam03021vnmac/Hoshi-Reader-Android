@@ -13,7 +13,7 @@
 import * as pdfjsLib from '/pdfjs/pdf.min.mjs';
 
 const PDF_TO_CSS_UNITS = pdfjsLib.PixelsPerInch.PDF_TO_CSS_UNITS;
-const PAGE_GAP_CSS_PX = 12;
+const PAGE_GAP_CSS_PX = 12; // at zoom factor 1; scales with zoom
 const PAGE_STACK_PADDING_CSS_PX = 8; // #hoshi-pdf-pages vertical padding
 const RENDER_MARGIN_PAGES = 2;
 const ZOOM_STEP = 1.25;
@@ -107,6 +107,21 @@ function currentCssScale() {
   return state.fitWidthScale * state.zoomFactor;
 }
 
+// Gaps scale with zoom like the pages, so every zoom level is a uniform
+// scaling of the page stack and a zoom animation ends exactly on the
+// committed layout, neighbor pages included.
+function pageGap() {
+  return PAGE_GAP_CSS_PX * state.zoomFactor;
+}
+
+// Fractional box relative to the viewport. offset* values round to whole CSS
+// px, and a zoom ratio magnifies that rounding into a visible shift.
+function viewportBox(element) {
+  const box = element.getBoundingClientRect();
+  const origin = viewport.getBoundingClientRect();
+  return { left: box.left - origin.left, top: box.top - origin.top, width: box.width, height: box.height };
+}
+
 function viewportFor(page, scale) {
   return page.getViewport({ scale: scale * PDF_TO_CSS_UNITS });
 }
@@ -122,6 +137,7 @@ function applyPageSize(record) {
   const width = record.baseWidth * scale;
   record.div.style.width = `${width}px`;
   record.div.style.aspectRatio = `${record.baseWidth} / ${record.baseHeight}`;
+  record.div.style.marginBottom = `${pageGap()}px`;
   fitTextLayerToPage(record);
 }
 
@@ -213,7 +229,7 @@ function visibleRange() {
   while (low < high) {
     const middle = (low + high) >>> 1;
     const div = state.pages[middle].div;
-    if (div.offsetTop + div.offsetHeight + PAGE_GAP_CSS_PX < topBound) low = middle + 1;
+    if (div.offsetTop + div.offsetHeight + pageGap() < topBound) low = middle + 1;
     else high = middle;
   }
   const first = low;
@@ -656,7 +672,7 @@ function pageIndexAt(point) {
   const { first, last } = visibleRange();
   for (let index = first; index <= last; index += 1) {
     const div = state.pages[index]?.div;
-    if (div && contentY < div.offsetTop + div.offsetHeight + PAGE_GAP_CSS_PX) return index;
+    if (div && contentY < div.offsetTop + div.offsetHeight + pageGap()) return index;
   }
   return state.currentPageIndex;
 }
@@ -671,27 +687,29 @@ function zoomAtPoint(factor, focal, { alignPage = false, animate = false } = {})
   if (!Number.isFinite(factor) || !state.pdf || state.opening) return;
   finishZoomAnimation();
   const nextFactor = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor));
-  const contentFocalX = viewport.scrollLeft + focal.x;
-  const contentFocalY = viewport.scrollTop + focal.y;
   const anchorDiv = state.pages[pageIndexAt(focal)]?.div;
-  const fractionX = anchorDiv ? (contentFocalX - anchorDiv.offsetLeft) / anchorDiv.offsetWidth : 0;
-  const fractionY = anchorDiv ? (contentFocalY - anchorDiv.offsetTop) / anchorDiv.offsetHeight : 0;
+  const before = anchorDiv ? viewportBox(anchorDiv) : null;
+  const anchored = before && before.width > 0 && before.height > 0;
+  const fractionX = anchored ? (focal.x - before.left) / before.width : 0;
+  const fractionY = anchored ? (focal.y - before.top) / before.height : 0;
   const commit = () => {
     state.zoomFactor = nextFactor;
     renderScaleChanged();
-    if (anchorDiv) {
-      viewport.scrollLeft = alignPage
-        ? Math.max(0, anchorDiv.offsetLeft)
-        : Math.max(0, anchorDiv.offsetLeft + fractionX * anchorDiv.offsetWidth - focal.x);
-      viewport.scrollTop = Math.max(0, anchorDiv.offsetTop + fractionY * anchorDiv.offsetHeight - focal.y);
+    if (anchored) {
+      // Scroll the resized anchor page to where the focal point stays put.
+      const after = viewportBox(anchorDiv);
+      const left = alignPage ? 0 : focal.x - fractionX * after.width;
+      const top = focal.y - fractionY * after.height;
+      viewport.scrollLeft = Math.max(0, viewport.scrollLeft + after.left - left);
+      viewport.scrollTop = Math.max(0, viewport.scrollTop + after.top - top);
     }
     onScroll();
     postMessage({ type: 'zoomChanged', zoomFactor: state.zoomFactor });
   };
-  if (!animate || !anchorDiv || Math.abs(nextFactor - state.zoomFactor) < 0.001 || !canAnimateZoom()) {
+  if (!animate || !anchored || Math.abs(nextFactor - state.zoomFactor) < 0.001 || !canAnimateZoom()) {
     commit();
   } else if (nextFactor > state.zoomFactor) {
-    magnifyThenCommit(nextFactor / state.zoomFactor, contentFocalX, contentFocalY, commit);
+    magnifyThenCommit(nextFactor / state.zoomFactor, focal, commit);
   } else {
     commitThenSettle(anchorDiv, commit);
   }
@@ -752,9 +770,11 @@ function runZoomAnimation(keyframes, fill, complete) {
 // commit keeps the focal point under the finger, so the anchor page lands
 // exactly). Committing first would raster ratio² screens of new tiles before
 // the first frame.
-function magnifyThenCommit(scale, contentFocalX, contentFocalY, commit) {
+function magnifyThenCommit(scale, focal, commit) {
   holdRendering();
-  const end = `translate(${(1 - scale) * contentFocalX}px, ${(1 - scale) * contentFocalY}px) scale(${scale})`;
+  // Scales the stack about the focal point; its origin is the stack's top-left.
+  const root = viewportBox(pagesRoot);
+  const end = `translate(${(1 - scale) * (focal.x - root.left)}px, ${(1 - scale) * (focal.y - root.top)}px) scale(${scale})`;
   runZoomAnimation([{ transform: 'none' }, { transform: end }], 'forwards', () => {
     commit();
     releaseRendering();
@@ -766,18 +786,19 @@ function magnifyThenCommit(scale, contentFocalX, contentFocalY, commit) {
 // Its start and end states both cover the viewport, so the transform never
 // shrinks the scrollable overflow enough to clamp the committed scroll.
 function commitThenSettle(anchorDiv, commit) {
-  const beforeX = anchorDiv.offsetLeft - viewport.scrollLeft;
-  const beforeY = anchorDiv.offsetTop - viewport.scrollTop;
-  const beforeWidth = anchorDiv.offsetWidth;
+  const before = viewportBox(anchorDiv);
   holdRendering();
   commit();
-  const ratio = beforeWidth / Math.max(1, anchorDiv.offsetWidth);
+  const after = viewportBox(anchorDiv);
+  const ratio = before.width / after.width;
   if (!Number.isFinite(ratio) || ratio <= 0 || Math.abs(ratio - 1) < 0.001) {
     releaseRendering();
     return;
   }
-  const translateX = beforeX + viewport.scrollLeft - anchorDiv.offsetLeft * ratio;
-  const translateY = beforeY + viewport.scrollTop - anchorDiv.offsetTop * ratio;
+  // A point p maps to root + translate + ratio * (p - root).
+  const root = viewportBox(pagesRoot);
+  const translateX = before.left - root.left - ratio * (after.left - root.left);
+  const translateY = before.top - root.top - ratio * (after.top - root.top);
   runZoomAnimation(
     [{ transform: `translate(${translateX}px, ${translateY}px) scale(${ratio})` }, { transform: 'none' }],
     'none',

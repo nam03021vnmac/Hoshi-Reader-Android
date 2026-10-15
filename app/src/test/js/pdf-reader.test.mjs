@@ -50,23 +50,45 @@ class Element {
   get textContent() { return this.children.map((child) => child.textContent).join(''); }
   get firstChild() { return this.children[0] ?? null; }
   setAttribute() {}
-  get offsetWidth() { return parseFloat(this.style.width) || 0; }
-  get offsetHeight() {
+  // Fractional layout like the real page stack; offset* round it to whole px
+  // as the DOM does, while getBoundingClientRect() keeps the fraction.
+  get layoutWidth() { return parseFloat(this.style.width) || 0; }
+  get layoutHeight() {
     if (this.style.display === 'none') return 0;
     const [width, height] = (this.style.aspectRatio || '1 / 1').split('/').map(Number);
-    return this.offsetWidth * height / width;
+    return this.layoutWidth * height / width;
   }
-  get offsetTop() {
-    const siblings = this.parentElement?.children || [];
-    return 8 + siblings.slice(0, siblings.indexOf(this)).reduce((sum, item) => sum + (item.style.display === 'none' ? 0 : item.offsetHeight + 12), 0);
+  get layoutTop() {
+    // #hoshi-pdf-pages sits at the scroller's origin with 8px vertical padding.
+    if (!this.parentElement?.parentElement) return 0;
+    const siblings = this.parentElement.children;
+    return 8 + siblings.slice(0, siblings.indexOf(this)).reduce((sum, item) => sum + (item.style.display === 'none'
+      ? 0 : item.layoutHeight + (parseFloat(item.style.marginBottom) || 12)), 0);
   }
-  get offsetLeft() {
+  get layoutLeft() {
     // #hoshi-pdf-pages centers pages inside max(viewport, widest page).
     if (!this.classList.contains('hoshi-pdf-page') || this.style.display === 'none') return 0;
     const siblings = this.parentElement?.children || [];
     const widest = Math.max(this.parentElement?.parentElement?.clientWidth || 0,
-      ...siblings.filter((item) => item.style.display !== 'none').map((item) => item.offsetWidth));
-    return (widest - this.offsetWidth) / 2;
+      ...siblings.filter((item) => item.style.display !== 'none').map((item) => item.layoutWidth));
+    return (widest - this.layoutWidth) / 2;
+  }
+  get offsetWidth() { return Math.round(this.layoutWidth); }
+  get offsetHeight() { return Math.round(this.layoutHeight); }
+  get offsetTop() { return Math.round(this.layoutTop); }
+  get offsetLeft() { return Math.round(this.layoutLeft); }
+  getBoundingClientRect() {
+    const parent = this.parentElement;
+    if (!parent) return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight };
+    const base = parent.getBoundingClientRect();
+    // Only the scroller (the root without a parent) scrolls its content.
+    const scrolled = !parent.parentElement;
+    return {
+      left: base.left + this.layoutLeft - (scrolled ? parent.scrollLeft : 0),
+      top: base.top + this.layoutTop - (scrolled ? parent.scrollTop : 0),
+      width: this.layoutWidth,
+      height: this.layoutHeight,
+    };
   }
   getContext() { return { canvas: this }; }
   closest(selector) {
@@ -830,6 +852,53 @@ test('double-tap zoom animates the lower-zoom layout and holds rendering until i
   assert.equal(zoomOut.cancelled, true);
   await r.flush();
   assert.ok(r.renders.length > rendersAtZoomOut);
+});
+
+test('double-tap zoom animations start and end exactly on the committed layout, neighbors included', async () => {
+  // Page 1's fit width is fractional (298.67px), so rounded offsets would drift.
+  const r = reader({ count: 4, pageWidths: { 2: 224 } });
+  await r.api.open();
+  await r.flush();
+  const pages = [1, 2].map((index) => r.root.children[index]);
+  r.viewport.scrollTop = pages[0].getBoundingClientRect().top + r.viewport.scrollTop;
+  const boxes = () => pages.map((page) => page.getBoundingClientRect());
+  const parse = (transform) => transform.match(/^translate\(([-\d.e]+)px, ([-\d.e]+)px\) scale\(([\d.e]+)\)$/).slice(1).map(Number);
+  // A transform on the stack maps p to root + translate + scale * (p - root).
+  const project = (box, root, [tx, ty, scale]) => ({
+    left: root.left + tx + scale * (box.left - root.left),
+    top: root.top + ty + scale * (box.top - root.top),
+    width: scale * box.width,
+  });
+  const assertSame = (actual, expected) => {
+    for (const key of ['left', 'top', 'width']) {
+      assert.ok(Math.abs(actual[key] - expected[key]) < 1e-6, `${key}: ${actual[key]} vs ${expected[key]}`);
+    }
+  };
+  const doubleTap = (x, y) => {
+    for (let i = 0; i < 2; i += 1) {
+      const touch = { clientX: x, clientY: y };
+      r.viewport.dispatch('touchstart', { touches: [touch] });
+      r.viewport.dispatch('touchend', { touches: [], changedTouches: [touch] });
+    }
+  };
+
+  // Zoom in: the last magnified frame is where the commit puts every page.
+  const beforeIn = boxes();
+  const rootIn = r.root.getBoundingClientRect();
+  doubleTap(300, 700);
+  const zoomIn = r.root.animations.at(-1);
+  const end = parse(zoomIn.keyframes[1].transform);
+  assert.ok(end[2] > 5);
+  await r.finishAnimations();
+  boxes().forEach((box, i) => assertSame(box, project(beforeIn[i], rootIn, end)));
+
+  // Zoom out: the first FLIP frame is where every page was before the tap.
+  const beforeOut = boxes();
+  doubleTap(300, 700);
+  const zoomOut = r.root.animations.at(-1);
+  const start = parse(zoomOut.keyframes[0].transform);
+  const rootOut = r.root.getBoundingClientRect();
+  boxes().forEach((box, i) => assertSame(project(box, rootOut, start), beforeOut[i]));
 });
 
 test('navigation during a double-tap zoom-in commits the zoom first', async () => {

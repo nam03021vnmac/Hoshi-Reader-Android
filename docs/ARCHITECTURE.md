@@ -293,7 +293,11 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   zoom animates the lower-zoom layout so no frame needs more than a screen of new
   tiles: zoom-in magnifies the current layout and commits under the last frame,
   zoom-out commits first and animates from the old page box (FLIP); pdf.js
-  re-rendering waits for the animation's own finish. The reader WebView sets
+  re-rendering waits for the animation's own finish. Page gaps scale with zoom,
+  so every zoom level is a uniform scaling of the page stack and both ends of a
+  zoom animation match the committed layout for every visible page; zoom
+  anchoring uses fractional `getBoundingClientRect()` boxes because the zoom
+  ratio magnifies `offset*` rounding into visible shifts. The reader WebView sets
   MATCH_PARENT layout params because AndroidView's default WRAP_CONTENT makes
   WebView force a zero-height layout viewport. The current page is the last
   visible page whose top is at or above the line where jumps and restores place
