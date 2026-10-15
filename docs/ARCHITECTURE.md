@@ -289,7 +289,16 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   with horizontal swipe page turns (at fit-width or smaller zoom) and saves an
   independent profile-scoped PDF preference. Both modes render a lazy page window with
   fit-width/button/pinch/double-tap zoom (double-tap only from
-  non-text taps, which wait for the double-tap window; text taps post at once), persist the
+  non-text taps, which wait for the double-tap window; text taps post at once). Double-tap
+  zoom animates the lower-zoom layout so no frame needs more than a screen of new
+  tiles: zoom-in magnifies the current layout and commits under the last frame,
+  zoom-out commits first and animates from the old page box (FLIP); pdf.js
+  re-rendering waits for the animation's own finish. The reader WebView sets
+  MATCH_PARENT layout params because AndroidView's default WRAP_CONTENT makes
+  WebView force a zero-height layout viewport. The current page is the last
+  visible page whose top is at or above the line where jumps and restores place
+  a page's top, so the saved page index reopens without drifting even when
+  several pages fit on screen. Both modes persist the
   page index through the shared bookmark sidecar, and reuses the shared reader
   chrome (title/progress bubble, bottom menu, focus mode, system bars, volume
   keys), lookup popup stack, highlight sidecars (page index as `character`),

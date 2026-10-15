@@ -220,6 +220,31 @@ indexes, monotonic cursors, binary search over sorted offsets, and cheap bounds
 checks before expensive range geometry. Keep exact geometry checks only where
 the cheap check cannot prove the result.
 
+## WebView Animation Smoothness
+
+For stutter in a Reader transform animation (for example PDF double-tap zoom),
+record a CDP trace (`Tracing.start` with `devtools.timeline`, `cc`, `viz`, `gpu`,
+`benchmark` and `disabled-by-default-devtools.timeline.frame`) around a gesture
+dispatched with `Input.dispatchTouchEvent`, and compare both directions of the
+animation and each variant:
+
+- the main-thread task for the triggering event, and time from it to the first
+  `ProxyImpl::ScheduledActionDraw`.
+- draws, `DroppedFrame`, and the longest draw gap inside the animation window.
+- `RasterTask` count by `tileData.layerId` and `SharedImageStub::OnCreateSharedImage`
+  (new tile textures). A burst at the first frame means the animation starts on
+  layout that has never been rastered.
+- `Animation` events: `compositeFailed: 0` confirms the compositor runs it.
+  The compositor starts it at its first drawn frame, so a timer started with it
+  ends it early by any first-frame delay.
+
+`LayerTree.compositingReasons` maps layers to DOM nodes, and
+`Page.startScreencast` frames around the start and end of the animation show
+any jump between the animated and committed states. A headless emulator renders
+GLES in software (`swangle`/`lavapipe` in the emulator log), so its frame rate is
+compositing-bound: use it to compare main-thread and raster work between
+variants, and confirm smoothness on a real device.
+
 ## Tests For Performance Fixes
 
 Performance fixes need regression coverage that protects the scalable property,

@@ -1317,6 +1317,13 @@ private fun PdfWebViewContent(
         modifier = modifier.background(backgroundColor),
         factory = { factoryContext ->
             HoshiPdfReaderWebView(factoryContext).apply {
+                // AndroidView adds the view with WRAP_CONTENT params, and WebView then
+                // forces a zero-height layout viewport, so the reader's scroller,
+                // clientHeight, and visible-page math collapse to 0px.
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
                 applyHoshiWebViewSecurityDefaults()
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false

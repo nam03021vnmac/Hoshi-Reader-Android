@@ -14,6 +14,7 @@ import * as pdfjsLib from '/pdfjs/pdf.min.mjs';
 
 const PDF_TO_CSS_UNITS = pdfjsLib.PixelsPerInch.PDF_TO_CSS_UNITS;
 const PAGE_GAP_CSS_PX = 12;
+const PAGE_STACK_PADDING_CSS_PX = 8; // #hoshi-pdf-pages vertical padding
 const RENDER_MARGIN_PAGES = 2;
 const ZOOM_STEP = 1.25;
 const ZOOM_MIN = 0.25;
@@ -24,6 +25,7 @@ const DOUBLE_TAP_SLOP_PX = 100;
 // Relative to the tapped page's own fit width.
 const DOUBLE_TAP_ZOOM = 2.5;
 const ZOOM_ANIMATION_MS = 220;
+const ZOOM_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
 const MAX_CANVAS_PIXELS = 4 * 1024 * 1024;
 const MAX_CANVAS_DIMENSION = 8192;
 
@@ -53,6 +55,8 @@ const state = {
   sessionId: '',
   ocrByPage: new Map(), // pageIndex -> validated OCR payload
   ocrRequestByPage: new Map(), // pageIndex -> latest requestId
+  zoomAnimation: null, // running double-tap zoom: { animation, complete }
+  renderingDeferred: false, // re-rendering waits for the zoom animation
 };
 
 function postMessage(message) {
@@ -123,19 +127,15 @@ function applyPageSize(record) {
 
 // The canvas stretches with the page box (CSS) until its new scale renders.
 // Keep the text layer, which carries lookup hit targets and highlight marks,
-// on the same box: pdf.js layers size from --scale-factor, while OCR layers
-// are laid out in CSS px at their build scale and need a uniform transform.
+// on the same box with the individual `scale` property: it composes with the
+// pdf.js rotation transforms and, unlike changing --scale-factor, restyles and
+// relayouts no text spans while the zoom commits.
 function fitTextLayerToPage(record) {
   const layer = record.textLayerDiv;
   const builtScale = Number(layer?.dataset?.cssScale);
   if (!layer || !(builtScale > 0)) return;
-  const scale = currentCssScale();
-  if (layer.classList.contains('hoshi-pdf-ocr-layer')) {
-    const ratio = scale / builtScale;
-    layer.style.transform = Math.abs(ratio - 1) < 0.0001 ? '' : `scale(${ratio})`;
-  } else {
-    layer.style.setProperty('--scale-factor', String(scale * PDF_TO_CSS_UNITS));
-  }
+  const ratio = currentCssScale() / builtScale;
+  layer.style.scale = Math.abs(ratio - 1) < 0.0001 ? '' : String(ratio);
 }
 
 async function loadPageBase(pageNumber) {
@@ -251,7 +251,8 @@ function scheduleRender(first, last) {
 }
 
 function renderPage(index) {
-  if (!state.pdf) return;
+  // Stale pages keep stretched pixels; the zoom animation's end re-renders.
+  if (!state.pdf || state.renderingDeferred) return;
   const record = pageRecord(index);
   if (record.renderTask) return;
   if (record.rendered && !record.stale) return;
@@ -488,17 +489,18 @@ function discardPage(index) {
 
 function reportCurrentPage() {
   if (state.pageCount === 0) return;
-  const center = viewport.scrollTop + viewport.clientHeight / 2;
+  // The current page is the last one whose top edge is at or above the line
+  // where scrollToPage puts a page's top. Restores and jumps then report the
+  // page they showed even when several pages fit on screen, so the saved index
+  // reopens at the same place instead of drifting. 1px absorbs scrollTop
+  // snapping to device pixels.
+  const line = viewport.scrollTop + PAGE_STACK_PADDING_CSS_PX + 1;
   let best = -1;
-  let bestDistance = Number.MAX_VALUE;
   for (let index = state.visibleFirst; index <= state.visibleLast; index += 1) {
     const div = state.pages[index]?.div;
     if (!div) continue;
-    const distance = Math.max(div.offsetTop - center, center - div.offsetTop - div.offsetHeight, 0);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = index;
-    }
+    if (best >= 0 && div.offsetTop > line) break;
+    best = index;
   }
   if (best >= 0 && best !== state.currentPageIndex) {
     state.currentPageIndex = best;
@@ -524,7 +526,7 @@ function onScroll() {
     postMessage({ type: 'viewportChanged' });
     requestAnimationFrame(() => {
       scrollReportScheduled = false;
-      if (!state.pdf || state.opening) return;
+      if (!state.pdf || state.opening || state.renderingDeferred) return;
       const { first, last } = visibleRange();
       scheduleRender(first, last);
       flushPendingOcr();
@@ -540,13 +542,16 @@ function scrollToPage(index) {
   if (!div) return;
   state.currentPageIndex = index;
   layoutAllPages();
-  viewport.scrollLeft = 0;
-  viewport.scrollTop = Math.max(0, div.offsetTop - 8);
+  // Pages are centered in the widest page's width, so a narrower page does not
+  // start at x 0: center it in the viewport, or show a wider one from its left.
+  viewport.scrollLeft = Math.max(0, div.offsetLeft + Math.min(0, (div.offsetWidth - viewport.clientWidth) / 2));
+  viewport.scrollTop = Math.max(0, div.offsetTop - PAGE_STACK_PADDING_CSS_PX);
   postMessage({ type: 'pageChanged', pageIndex: index, pageCount: state.pageCount });
   onScroll();
 }
 
 function setViewMode(continuousScroll, pageSwipeThresholdPx = state.pageSwipeThresholdPx) {
+  finishZoomAnimation();
   if (Number.isFinite(pageSwipeThresholdPx)) state.pageSwipeThresholdPx = Math.max(0, pageSwipeThresholdPx);
   const continuous = continuousScroll === true;
   if (state.continuousScroll === continuous) return;
@@ -561,18 +566,20 @@ function setViewMode(continuousScroll, pageSwipeThresholdPx = state.pageSwipeThr
 
 function setZoomFactor(factor) {
   if (!Number.isFinite(factor) || !state.pdf || state.opening) return;
+  finishZoomAnimation();
   const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor));
   if (Math.abs(clamped - state.zoomFactor) < 0.001) return;
   const anchorIndex = state.currentPageIndex >= 0 ? state.currentPageIndex : 0;
   const anchorRecord = pageRecord(anchorIndex);
   const anchorDiv = anchorRecord.div;
+  // Keep the content at the current-page line (see reportCurrentPage) in place.
   const anchorFraction = anchorDiv
-    ? (viewport.scrollTop - anchorDiv.offsetTop) / Math.max(1, anchorDiv.offsetHeight)
+    ? (viewport.scrollTop + PAGE_STACK_PADDING_CSS_PX - anchorDiv.offsetTop) / Math.max(1, anchorDiv.offsetHeight)
     : 0;
   state.zoomFactor = clamped;
   renderScaleChanged();
   if (anchorDiv) {
-    viewport.scrollTop = anchorDiv.offsetTop + anchorFraction * anchorDiv.offsetHeight;
+    viewport.scrollTop = Math.max(0, anchorDiv.offsetTop + anchorFraction * anchorDiv.offsetHeight - PAGE_STACK_PADDING_CSS_PX);
   }
   onScroll();
   postMessage({ type: 'zoomChanged', zoomFactor: state.zoomFactor });
@@ -588,17 +595,18 @@ function zoomOut() {
 
 async function fitWidth() {
   if (!state.pdf || state.opening) return;
+  finishZoomAnimation();
   const anchor = state.currentPageIndex;
   await computeFitWidthScale();
   state.zoomFactor = 1.0;
   renderScaleChanged();
-  viewport.scrollLeft = 0;
   scrollToPage(anchor);
   postMessage({ type: 'zoomChanged', zoomFactor: state.zoomFactor });
 }
 
 function jumpToPage(pageIndex) {
   if (!state.pdf || state.opening || !Number.isFinite(pageIndex)) return;
+  finishZoomAnimation();
   state.preparedSelection = null;
   window.getSelection()?.removeAllRanges();
   window.hoshiSelection?.clearSelection();
@@ -661,13 +669,15 @@ function pageIndexAt(point) {
 // keeping the focal x, so a page zoomed to its fit width fills the screen.
 function zoomAtPoint(factor, focal, { alignPage = false, animate = false } = {}) {
   if (!Number.isFinite(factor) || !state.pdf || state.opening) return;
+  finishZoomAnimation();
+  const nextFactor = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor));
   const contentFocalX = viewport.scrollLeft + focal.x;
   const contentFocalY = viewport.scrollTop + focal.y;
   const anchorDiv = state.pages[pageIndexAt(focal)]?.div;
   const fractionX = anchorDiv ? (contentFocalX - anchorDiv.offsetLeft) / anchorDiv.offsetWidth : 0;
   const fractionY = anchorDiv ? (contentFocalY - anchorDiv.offsetTop) / anchorDiv.offsetHeight : 0;
   const commit = () => {
-    state.zoomFactor = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor));
+    state.zoomFactor = nextFactor;
     renderScaleChanged();
     if (anchorDiv) {
       viewport.scrollLeft = alignPage
@@ -675,62 +685,115 @@ function zoomAtPoint(factor, focal, { alignPage = false, animate = false } = {})
         : Math.max(0, anchorDiv.offsetLeft + fractionX * anchorDiv.offsetWidth - focal.x);
       viewport.scrollTop = Math.max(0, anchorDiv.offsetTop + fractionY * anchorDiv.offsetHeight - focal.y);
     }
+    onScroll();
+    postMessage({ type: 'zoomChanged', zoomFactor: state.zoomFactor });
   };
-  if (animate) animateZoom(anchorDiv, commit);
-  else commit();
-  onScroll();
-  postMessage({ type: 'zoomChanged', zoomFactor: state.zoomFactor });
+  if (!animate || !anchorDiv || Math.abs(nextFactor - state.zoomFactor) < 0.001 || !canAnimateZoom()) {
+    commit();
+  } else if (nextFactor > state.zoomFactor) {
+    magnifyThenCommit(nextFactor / state.zoomFactor, contentFocalX, contentFocalY, commit);
+  } else {
+    commitThenSettle(anchorDiv, commit);
+  }
 }
 
 // --- Zoom animation -------------------------------------------------------------
 
-let zoomAnimationTimer = null;
+function canAnimateZoom() {
+  return typeof pagesRoot.animate === 'function' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches !== true;
+}
 
+// Cancels in-flight renders, whose pixels the zoom is about to make stale, and
+// holds new ones while the zoom animates: pdf.js render slices and canvas or
+// text-layer swaps would otherwise delay its frames.
+function holdRendering() {
+  state.renderingDeferred = true;
+  for (const index of state.activePages) cancelRenderTask(pageRecord(index));
+}
+
+function releaseRendering() {
+  if (!state.renderingDeferred) return;
+  state.renderingDeferred = false;
+  onScroll();
+}
+
+// Completes the running zoom animation now: when it finishes, or when a
+// gesture or another zoom or navigation interrupts it.
 function finishZoomAnimation() {
-  if (zoomAnimationTimer === null) return;
-  clearTimeout(zoomAnimationTimer);
-  zoomAnimationTimer = null;
-  pagesRoot.style.transition = '';
-  pagesRoot.style.transform = '';
-  pagesRoot.style.transformOrigin = '';
+  const running = state.zoomAnimation;
+  state.zoomAnimation = null;
+  running?.complete();
 }
 
-function prefersReducedMotion() {
-  return window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
+// The animation's own finish completes it. The compositor starts it at its
+// first frame, so a timer started with it would cut it short.
+function runZoomAnimation(keyframes, fill, complete) {
+  const animation = pagesRoot.animate(keyframes, { duration: ZOOM_ANIMATION_MS, easing: ZOOM_EASING, fill });
+  state.zoomAnimation = {
+    animation,
+    complete() {
+      animation.cancel();
+      complete();
+    },
+  };
+  animation.finished.then(() => {
+    if (state.zoomAnimation?.animation === animation) finishZoomAnimation();
+  }, () => {});
 }
 
-// FLIP: commit the final layout and scroll once, then start the page stack at
-// a transform that reproduces the anchor page's old on-screen box and
-// transition it to identity. Layout and canvas re-rendering happen only once,
-// and the start and end states both cover the viewport, so the transform never
-// shrinks the scrollable overflow enough to clamp the committed scroll.
-function animateZoom(anchorDiv, commit) {
-  finishZoomAnimation();
-  if (!anchorDiv || prefersReducedMotion()) {
+// Both directions animate the lower-zoom layout, so no frame needs more than a
+// screen of tiles that are not rastered yet. #hoshi-pdf-pages keeps
+// transform-origin 0 0 from CSS, and only transform animates, which keeps the
+// animation on the compositor.
+//
+// Zooming in magnifies the current layout, whose tiles already exist, about
+// the focal point, then commits the larger layout under the last frame (the
+// commit keeps the focal point under the finger, so the anchor page lands
+// exactly). Committing first would raster ratio² screens of new tiles before
+// the first frame.
+function magnifyThenCommit(scale, contentFocalX, contentFocalY, commit) {
+  holdRendering();
+  const end = `translate(${(1 - scale) * contentFocalX}px, ${(1 - scale) * contentFocalY}px) scale(${scale})`;
+  runZoomAnimation([{ transform: 'none' }, { transform: end }], 'forwards', () => {
     commit();
-    return;
-  }
+    releaseRendering();
+  });
+}
+
+// Zooming out commits the smaller layout first, then animates from a transform
+// that reproduces the anchor page's old on-screen box back to identity (FLIP).
+// Its start and end states both cover the viewport, so the transform never
+// shrinks the scrollable overflow enough to clamp the committed scroll.
+function commitThenSettle(anchorDiv, commit) {
   const beforeX = anchorDiv.offsetLeft - viewport.scrollLeft;
   const beforeY = anchorDiv.offsetTop - viewport.scrollTop;
   const beforeWidth = anchorDiv.offsetWidth;
+  holdRendering();
   commit();
   const ratio = beforeWidth / Math.max(1, anchorDiv.offsetWidth);
-  if (!Number.isFinite(ratio) || ratio <= 0 || Math.abs(ratio - 1) < 0.001) return;
+  if (!Number.isFinite(ratio) || ratio <= 0 || Math.abs(ratio - 1) < 0.001) {
+    releaseRendering();
+    return;
+  }
   const translateX = beforeX + viewport.scrollLeft - anchorDiv.offsetLeft * ratio;
   const translateY = beforeY + viewport.scrollTop - anchorDiv.offsetTop * ratio;
-  pagesRoot.style.transition = 'none';
-  pagesRoot.style.transformOrigin = '0 0';
-  pagesRoot.style.transform = `translate(${translateX}px, ${translateY}px) scale(${ratio})`;
-  void pagesRoot.offsetWidth; // Apply the start transform before transitioning.
-  pagesRoot.style.transition = `transform ${ZOOM_ANIMATION_MS}ms cubic-bezier(0.2, 0, 0, 1)`;
-  pagesRoot.style.transform = 'none';
-  zoomAnimationTimer = setTimeout(finishZoomAnimation, ZOOM_ANIMATION_MS);
+  runZoomAnimation(
+    [{ transform: `translate(${translateX}px, ${translateY}px) scale(${ratio})` }, { transform: 'none' }],
+    'none',
+    releaseRendering,
+  );
+}
+
+function clearPinchPreview() {
+  pagesRoot.style.transform = '';
+  pagesRoot.style.transformOrigin = '';
 }
 
 function endPinch() {
   const scale = pinchScale();
   const focal = pinchFocal();
-  pagesRoot.style.transform = '';
+  clearPinchPreview();
   state.pinch = null;
   zoomAtPoint(state.zoomFactor * scale, focal);
 }
@@ -1147,6 +1210,7 @@ window.hoshiPdfReader = {
 viewport.addEventListener('scroll', onScroll, { passive: true });
 window.addEventListener('resize', () => {
   if (!state.pdf || state.opening) return;
+  finishZoomAnimation();
   const anchor = state.currentPageIndex;
   computeFitWidthScale().then(() => {
     renderScaleChanged();
@@ -1223,7 +1287,7 @@ viewport.addEventListener(
       };
       return;
     }
-    if (state.pinch) pagesRoot.style.transform = '';
+    if (state.pinch) clearPinchPreview();
     state.pinch = null;
     tapCandidate = null;
     touchStarted = null;
@@ -1313,7 +1377,7 @@ viewport.addEventListener(
     touchStarted = null;
     tapCandidate = null;
     clearPendingTap();
-    pagesRoot.style.transform = '';
+    clearPinchPreview();
   },
   { passive: true },
 );

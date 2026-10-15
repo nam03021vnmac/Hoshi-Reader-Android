@@ -82,6 +82,17 @@ class Element {
     return null;
   }
   addEventListener(type, callback, options) { this.listeners.set(type, { callback, options }); }
+  animate(keyframes, options) {
+    let settle;
+    const animation = {
+      keyframes, options, cancelled: false,
+      finished: new Promise((resolve, reject) => { settle = { resolve, reject }; }),
+      finish() { settle.resolve(animation); },
+      cancel() { animation.cancelled = true; settle.reject(new Error('AbortError')); },
+    };
+    (this.animations ||= []).push(animation);
+    return animation;
+  }
   dispatch(type, event = {}) { this.listeners.get(type)?.callback(event); }
 }
 
@@ -281,6 +292,10 @@ function reader({ count = 12, pendingRender = false, pendingText = false, texts 
       pending.forEach((callback) => callback());
     },
     get pendingTimers() { return timers.size; },
+    async finishAnimations() {
+      for (const animation of root.animations || []) animation.finish();
+      await this.flush();
+    },
     async flush() {
       for (let i = 0; i < 20; i += 1) {
         frames.splice(0).forEach((callback) => callback());
@@ -330,6 +345,27 @@ function ocrPayload(pageIndex = 0, revisionId = 'old', requestId = 1, text = 'çŒ
       quad: { x0: 0.1, y0: 0.1, x1: 0.8, y1: 0.1, x2: 0.8, y2: 0.2, x3: 0.1, y3: 0.2 } }],
   };
 }
+
+test('pages shorter than half the screen keep the restored or jumped-to page current', async () => {
+  // A wide first page sets the fit width, so the other pages are 150x200.
+  const r = reader({ count: 12, pageWidths: { 1: 1800 } });
+  await r.api.open({ pageIndex: 5 });
+  await r.flush();
+  assert.equal(r.root.children[5].offsetHeight, 200);
+  assert.equal(JSON.parse(r.api.progress()).pageIndex, 5);
+  r.api.jumpToPage(3);
+  await r.flush();
+  assert.equal(JSON.parse(r.api.progress()).pageIndex, 3);
+  // Scrolling hands over once a page and its gap pass the top padding line.
+  r.viewport.scrollTop = r.root.children[4].offsetTop + 150 - 8;
+  r.viewport.dispatch('scroll');
+  await r.flush();
+  assert.equal(JSON.parse(r.api.progress()).pageIndex, 4);
+  r.viewport.scrollTop = r.root.children[5].offsetTop - 8;
+  r.viewport.dispatch('scroll');
+  await r.flush();
+  assert.equal(JSON.parse(r.api.progress()).pageIndex, 5);
+});
 
 test('explicit single-page mode and switching modes preserve page and zoom', async () => {
   const r = reader();
@@ -496,16 +532,20 @@ test('until pages re-render at a new zoom, text layers follow the resized page b
   const embeddedLayer = layerOf(1);
   assert.ok(ocrLayer.classList.contains('hoshi-pdf-ocr-layer'));
   assert.ok(!embeddedLayer.classList.contains('hoshi-pdf-ocr-layer'));
-  const embeddedScale = Number(embeddedLayer.style['--scale-factor']);
+  const embeddedScale = embeddedLayer.style['--scale-factor'];
   r.api.setZoomFactor(2);
-  // Synchronously, before any replacement render lands.
-  assert.equal(ocrLayer.style.transform, 'scale(2)');
-  assert.ok(Math.abs(Number(embeddedLayer.style['--scale-factor']) - embeddedScale * 2) < 1e-9);
+  // Synchronously, before any replacement render lands, without restyling spans.
+  assert.equal(ocrLayer.style.scale, '2');
+  assert.equal(embeddedLayer.style.scale, '2');
+  assert.equal(embeddedLayer.style['--scale-factor'], embeddedScale);
   await r.flush();
   const rebuiltOcr = layerOf(0);
+  const rebuiltEmbedded = layerOf(1);
   assert.notEqual(rebuiltOcr, ocrLayer);
-  assert.ok(!rebuiltOcr.style.transform);
-  assert.ok(Math.abs(Number(layerOf(1).style['--scale-factor']) - embeddedScale * 2) < 1e-9);
+  assert.notEqual(rebuiltEmbedded, embeddedLayer);
+  assert.ok(!rebuiltOcr.style.scale);
+  assert.ok(!rebuiltEmbedded.style.scale);
+  assert.ok(Math.abs(Number(rebuiltEmbedded.style['--scale-factor']) - Number(embeddedScale) * 2) < 1e-9);
 });
 
 test('eviction cancels pending canvas work and stale completions cannot recreate text layers', async () => {
@@ -711,7 +751,7 @@ test('double-tap on blank areas toggles fit-width and 2.5x at the tap point whil
 
   tap(300, 400);
   tap(300, 400);
-  await r.flush();
+  await r.finishAnimations();
   assert.deepEqual(zooms(), [2.5]);
   assert.equal(r.root.children[0].offsetWidth, 1500);
   // The tapped content point stays under the finger.
@@ -731,42 +771,83 @@ test('double-tap on blank areas toggles fit-width and 2.5x at the tap point whil
   assert.equal(taps().length, 5);
 });
 
-test('double-tap zoom animates from the old page box to the committed layout and touches cancel it', async () => {
+test('double-tap zoom animates the lower-zoom layout and holds rendering until it ends', async () => {
   const r = reader();
   await r.api.open();
   await r.flush();
-  const transforms = [];
-  let transform = '';
-  Object.defineProperty(r.root.style, 'transform', {
-    get: () => transform,
-    set: (value) => { transforms.push(value); transform = value; },
-  });
   const tap = (x, y) => {
     const touch = { clientX: x, clientY: y };
     r.viewport.dispatch('touchstart', { touches: [touch] });
     r.viewport.dispatch('touchend', { touches: [], changedTouches: [touch] });
   };
-  tap(300, 400);
-  tap(300, 400);
-  // Committed: page 0 is 1500px wide at offset (0, 8), scrolled to (450, 588).
-  // The start transform maps it back onto its old 600px box at (0, 8).
-  const [start, end] = transforms.slice(-2);
-  const [, tx, ty, ratio] = start.match(/^translate\(([-\d.]+)px, ([-\d.]+)px\) scale\(([\d.]+)\)$/).map(Number);
-  assert.equal(ratio, 0.4);
-  assert.equal(tx, 450);
-  assert.ok(Math.abs(ty - (8 + 588 - 8 * 0.4)) < 1e-9);
-  assert.equal(end, 'none');
-  assert.equal(r.root.style.transformOrigin, '0 0');
-  assert.match(r.root.style.transition, /^transform 220ms /);
-  assert.equal(r.pendingTimers, 1);
+  const parse = (transform) => transform.match(/^translate\(([-\d.e]+)px, ([-\d.e]+)px\) scale\(([\d.e]+)\)$/).slice(1).map(Number);
+  const near = (actual, expected) => actual.forEach((value, i) => assert.ok(Math.abs(value - expected[i]) < 1e-6, `${actual} ~ ${expected}`));
+  // A finished pinch must not leave its focal transform-origin behind: the
+  // zoom keyframes assume the stylesheet's 0 0 origin.
+  const fingers = [{ clientX: 100, clientY: 100 }, { clientX: 200, clientY: 100 }];
+  r.viewport.dispatch('touchstart', { touches: fingers });
+  r.viewport.dispatch('touchmove', { touches: fingers, preventDefault() {} });
+  r.viewport.dispatch('touchend', { touches: [] });
+  assert.equal(r.root.style.transformOrigin, '');
+  await r.flush();
 
-  // A new touch snaps to the committed layout before hit-testing.
-  r.viewport.dispatch('touchstart', { touches: [{ clientX: 10, clientY: 10 }] });
-  assert.equal(r.root.style.transform, '');
-  assert.equal(r.root.style.transition, '');
-  assert.equal(r.pendingTimers, 0);
+  // Zoom in magnifies the current, already rastered 600px layout about the
+  // tap point; the 2.5x layout commits only under the last frame.
+  const rendersBefore = r.renders.length;
+  tap(300, 400);
+  tap(300, 400);
+  const zoomIn = r.root.animations.at(-1);
+  assert.equal(zoomIn.keyframes[0].transform, 'none');
+  near(parse(zoomIn.keyframes[1].transform), [-450, -600, 2.5]);
+  assert.deepEqual({ ...zoomIn.options }, { duration: 220, easing: 'cubic-bezier(0.2, 0, 0, 1)', fill: 'forwards' });
+  assert.equal(r.root.children[0].offsetWidth, 600);
+  await r.flush();
+  assert.equal(r.renders.length, rendersBefore);
+  zoomIn.finish();
+  await r.flush();
+  assert.equal(zoomIn.cancelled, true);
+  // The last frame showed page 0 at 2.5 * (0, 8) + (-450, -600); the commit
+  // puts its 1500px box at (0, 8) - scroll, the same place.
+  assert.equal(r.root.children[0].offsetWidth, 1500);
   assert.equal(r.viewport.scrollLeft, 450);
   assert.equal(r.viewport.scrollTop, 588);
+  assert.ok(r.renders.length > rendersBefore);
+
+  // Zoom out commits the 600px layout first and animates from the old box.
+  const rendersAtZoomOut = r.renders.length;
+  tap(300, 400);
+  tap(300, 400);
+  const zoomOut = r.root.animations.at(-1);
+  near(parse(zoomOut.keyframes[0].transform), [-450, -600, 2.5]);
+  assert.equal(zoomOut.keyframes[1].transform, 'none');
+  assert.equal(zoomOut.options.fill, 'none');
+  assert.equal(r.root.children[0].offsetWidth, 600);
+  assert.equal(r.viewport.scrollLeft, 0);
+  await r.flush();
+  assert.equal(r.renders.length, rendersAtZoomOut);
+  // A touch completes it at once and releases rendering.
+  r.viewport.dispatch('touchstart', { touches: [{ clientX: 10, clientY: 10 }] });
+  assert.equal(zoomOut.cancelled, true);
+  await r.flush();
+  assert.ok(r.renders.length > rendersAtZoomOut);
+});
+
+test('navigation during a double-tap zoom-in commits the zoom first', async () => {
+  const r = reader();
+  await r.api.open();
+  await r.flush();
+  for (let i = 0; i < 2; i += 1) {
+    const touch = { clientX: 300, clientY: 400 };
+    r.viewport.dispatch('touchstart', { touches: [touch] });
+    r.viewport.dispatch('touchend', { touches: [], changedTouches: [touch] });
+  }
+  assert.equal(r.root.children[0].offsetWidth, 600);
+  r.api.jumpToPage(3);
+  assert.equal(r.root.animations.at(-1).cancelled, true);
+  assert.equal(r.root.children[0].offsetWidth, 1500);
+  await r.flush();
+  assert.equal(JSON.parse(r.api.progress()).pageIndex, 3);
+  assert.equal(r.viewport.scrollTop, r.root.children[3].offsetTop - 8);
 });
 
 test('double-tap toggles a narrower page between its own fit width and 2.5x, anchored on that page', async () => {
@@ -786,7 +867,7 @@ test('double-tap toggles a narrower page between its own fit width and 2.5x, anc
     }
   };
   doubleTap(300, 700);
-  await r.flush();
+  await r.finishAnimations();
   assert.equal(narrow.offsetWidth, 1500);
   assert.equal(r.viewport.scrollLeft, narrow.offsetLeft + 0.5 * narrow.offsetWidth - 300);
   assert.equal(r.viewport.scrollTop, narrow.offsetTop + 0.225 * narrow.offsetHeight - 700);
@@ -796,8 +877,15 @@ test('double-tap toggles a narrower page between its own fit width and 2.5x, anc
   assert.equal(narrow.offsetWidth, 600);
   assert.equal(r.viewport.scrollLeft, narrow.offsetLeft);
   assert.equal(r.viewport.scrollTop, narrow.offsetTop + 0.225 * narrow.offsetHeight - 700);
-  doubleTap(300, 700);
+  // Navigating keeps a centered narrower page on screen instead of x 0.
+  r.api.jumpToPage(1);
+  assert.equal(r.viewport.scrollLeft, narrow.offsetLeft);
+  r.api.jumpToPage(0);
+  assert.equal(r.viewport.scrollLeft, 0);
+  r.api.jumpToPage(1);
   await r.flush();
+  doubleTap(300, 700);
+  await r.finishAnimations();
   assert.equal(narrow.offsetWidth, 1500);
   assert.ok(!r.messages.some((message) => message.type === 'tap'));
 });
