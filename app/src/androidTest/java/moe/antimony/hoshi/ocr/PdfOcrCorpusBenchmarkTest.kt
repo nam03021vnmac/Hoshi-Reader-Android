@@ -12,6 +12,7 @@ import moe.antimony.hoshi.ocr.layout.JapaneseOcrPostprocessor
 import moe.antimony.hoshi.ocr.layout.PostprocessorInputLine
 import moe.antimony.hoshi.ocr.paddle.PaddleOcrConfiguration
 import moe.antimony.hoshi.ocr.paddle.PaddleOcrEngine
+import moe.antimony.hoshi.ocr.paddle.PaddleOcrModelSpec
 import moe.antimony.hoshi.ocr.pdf.NormalizedQuad
 import moe.antimony.hoshi.ocr.pdf.PdfOcrRasterizer
 import org.json.JSONArray
@@ -35,7 +36,8 @@ class PdfOcrCorpusBenchmarkTest {
         val runs = args.getString("ocrRuns")?.toIntOrNull()?.coerceIn(1, 30) ?: 5
         val threads = args.getString("ocrThreads")?.toIntOrNull() ?: 4
         val batch = args.getString("ocrBatch")?.toIntOrNull() ?: 1
-        val engine = PaddleOcrEngine(context, Dispatchers.IO, PaddleOcrConfiguration(threads, batch))
+        val spec = if (args.getString("ocrModel") == "manga") PaddleOcrModelSpec.Manga else PaddleOcrModelSpec.Standard
+        val engine = PaddleOcrEngine(context, Dispatchers.IO, PaddleOcrConfiguration(threads, batch), spec)
         val rasterizer = PdfOcrRasterizer(Dispatchers.IO)
         val layout = JapaneseOcrPostprocessor()
         val results = JSONArray()

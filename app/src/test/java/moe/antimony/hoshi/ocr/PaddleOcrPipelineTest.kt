@@ -180,6 +180,39 @@ class PaddleOcrPipelineTest {
     }
 
     @Test
+    fun plainDictParserKeepsLinesAndAppendsSpaceClass() {
+        val chars = PaddleDict.parsePlainDict("!\r\n\"\nあ\n　\n", "dict.txt")
+        assertEquals(listOf("!", "\"", "あ", "　", " "), chars)
+    }
+
+    @Test
+    fun longSideDetResizeScalesPagesAndBudgetsStrips() {
+        val page = PaddleDetPreprocessor.preprocessBgr(ByteArray(1200 * 1700 * 3), 1200, 1700, PaddleDetResize.LongSide(960))
+        assertEquals(960, page.height)
+        assertEquals(672, page.width)
+        val small = PaddleDetPreprocessor.preprocessBgr(ByteArray(300 * 400 * 3), 300, 400, PaddleDetResize.LongSide(960))
+        assertEquals(960, small.height)
+        assertEquals(704, small.width) // 720 / 32 = 22.5 rounds half to even
+        // 800x4000 strip: sqrt(0.75 * 960^2 / (800 * 4000)) keeps a 3:4 page's pixel budget.
+        val strip = PaddleDetPreprocessor.preprocessBgr(ByteArray(800 * 4000 * 3), 800, 4000, PaddleDetResize.LongSide(960))
+        assertEquals(1856, strip.height)
+        assertEquals(384, strip.width)
+    }
+
+    @Test
+    fun recPreprocessCanKeepBgrChannelOrder() {
+        val pixel = byteArrayOf(0xFF.toByte(), 0, 0) // pure blue in BGR
+        val crop = RecCrop(ByteArray(48 * 48 * 3) { pixel[it % 3] }, 48, 48)
+        val channel = 48 * 48
+        val rgb = PaddleRecPreprocessor.preprocessBatch(listOf(crop))
+        val bgr = PaddleRecPreprocessor.preprocessBatch(listOf(crop), bgrInput = true)
+        assertEquals(-1f, rgb.tensor[0], 1e-6f)
+        assertEquals(1f, rgb.tensor[2 * channel], 1e-6f)
+        assertEquals(1f, bgr.tensor[0], 1e-6f)
+        assertEquals(-1f, bgr.tensor[2 * channel], 1e-6f)
+    }
+
+    @Test
     fun detPreprocessSnapsToMultipleOf32() {
         // 100x60 BGR plane: 100 -> 96, 60 -> 64 after the multiple-of-32 snap.
         val bgr = ByteArray(100 * 60 * 3) { 0x7F.toByte() }

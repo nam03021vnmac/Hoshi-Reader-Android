@@ -30,7 +30,8 @@ object PaddleRecPreprocessor {
     fun normalizedWidth(width: Int, height: Int): Int =
         ceil(FIXED_HEIGHT * width.toDouble() / height.coerceAtLeast(1)).toInt().coerceIn(1, MAX_IMG_WIDTH)
 
-    fun preprocessBatch(crops: List<RecCrop>): RecNetworkInput {
+    /** [bgrInput] keeps decode channel order for models trained on BGR crops. */
+    fun preprocessBatch(crops: List<RecCrop>, bgrInput: Boolean = false): RecNetworkInput {
         require(crops.isNotEmpty())
         val resized = crops.map { crop ->
             val newW = normalizedWidth(crop.width, crop.height)
@@ -52,7 +53,7 @@ object PaddleRecPreprocessor {
                 for (y in 0 until FIXED_HEIGHT) {
                     for (x in 0 until maxW) {
                         val value = if (x < w) {
-                            (bytes[(y * w + x) * 3 + (2 - c)].toInt() and 0xFF) / 127.5 - 1.0
+                            (bytes[(y * w + x) * 3 + if (bgrInput) c else 2 - c].toInt() and 0xFF) / 127.5 - 1.0
                         } else {
                             0.0
                         }
@@ -176,6 +177,15 @@ object PaddleDict {
         return characters.toMutableList().apply {
             if (lastOrNull() != " ") add(" ")
         }
+    }
+
+    /** One symbol per line (blank class excluded), followed by the space class. */
+    fun parsePlainDict(text: String, assetPath: String): List<String> {
+        val characters = text.removePrefix("\uFEFF").split('\n')
+            .map { it.removeSuffix("\r") }
+            .let { if (it.lastOrNull()?.isEmpty() == true) it.dropLast(1) else it }
+        require(characters.isNotEmpty()) { "Empty character dict in $assetPath" }
+        return characters + " "
     }
 
     private fun leadingSpaces(line: String): Int {

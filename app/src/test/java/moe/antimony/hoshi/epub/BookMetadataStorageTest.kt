@@ -373,6 +373,23 @@ class BookMetadataStorageTest {
     }
 
     @Test
+    fun mangaShelfFlagIsOmittedUnlessSetAndRoundTrips() = runBlocking {
+        val filesDir = Files.createTempDirectory("hoshi-manga-shelves").toFile()
+        val storage = BookStorage(filesDir)
+        val shelves = listOf(
+            BookShelf(name = "Manga", bookIds = emptyList(), isManga = true),
+            BookShelf(name = "Novels", bookIds = emptyList()),
+        )
+
+        storage.saveShelves(shelves)
+
+        val saved = Json.parseToJsonElement(filesDir.resolve("Books/shelves.json").readText()).jsonArray
+        assertEquals("true", saved[0].jsonObject.getValue("isManga").jsonPrimitive.content)
+        assertFalse("isManga" in saved[1].jsonObject)
+        assertEquals(shelves, storage.loadShelves())
+    }
+
+    @Test
     fun loadBookEntriesMigratesLegacyNonUuidBookIdsAndShelfMembershipsForIosBackupCompatibility() = runBlocking {
         val filesDir = Files.createTempDirectory("hoshi-metadata-uuid-migration").toFile()
         val storage = BookStorage(filesDir)

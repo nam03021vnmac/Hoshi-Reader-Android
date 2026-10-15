@@ -197,6 +197,11 @@ class BookRepository private constructor(
         sidecarDataSource.saveShelves(fileDataSource.booksDirectory, shelves)
     }
 
+    suspend fun isInMangaShelf(bookRoot: File): Boolean {
+        val bookId = loadMetadata(bookRoot)?.id ?: return false
+        return loadShelves().any { it.isManga && bookId in it.bookIds }
+    }
+
     private suspend fun replaceShelfBookIds(idReplacements: Map<String, String>) {
         saveShelves(
             loadShelves().map { shelf ->

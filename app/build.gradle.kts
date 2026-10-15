@@ -210,11 +210,31 @@ val preparePaddleOcr by tasks.registering(PreparePaddleOcrTask::class) {
     recConfigUrl.set("https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/main/inference.yml")
     recConfigSha256.set("ab078671bb49f06228eadccd34f1bb501e157f7a047095ffb943ba81512c77d1")
     recConfigBytes.set(150579L)
+    assetPath.set("ocr/paddle")
+    recConfigFileName.set("inference.yml")
     outputDirectory.set(layout.buildDirectory.dir("generated/paddleocr"))
+    assetsDirectory.set(outputDirectory.dir("assets"))
+}
+// Manga-shelf PDFs: PP-OCRv6_manga v0.2 FP32 (tiny det + small rec fine-tuned on manga).
+val paddleOcrMangaRevision = "8ee29e094b6aac77dd067c70805438782fa16ab0"
+val preparePaddleOcrManga by tasks.registering(PreparePaddleOcrTask::class) {
+    detUrl.set("https://huggingface.co/Kellenok/PP-OCRv6_manga/resolve/$paddleOcrMangaRevision/det/manga_det_v0.2.onnx")
+    detSha256.set("d132078c46e292b226fb5a2ca52a7612ad319262dfdf493e7d8e3be435295978")
+    detBytes.set(1816954L)
+    recUrl.set("https://huggingface.co/Kellenok/PP-OCRv6_manga/resolve/$paddleOcrMangaRevision/rec/manga_rec_v0.2.onnx")
+    recSha256.set("de12c84c63e62c80339e882e675983d886670dcb6f0147e1ed041afd6fa81888")
+    recBytes.set(21167540L)
+    recConfigUrl.set("https://huggingface.co/Kellenok/PP-OCRv6_manga/resolve/$paddleOcrMangaRevision/ppocrv6_dict.txt")
+    recConfigSha256.set("b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d")
+    recConfigBytes.set(74947L)
+    assetPath.set("ocr/paddle-manga")
+    recConfigFileName.set("dict.txt")
+    outputDirectory.set(layout.buildDirectory.dir("generated/paddleocr-manga"))
     assetsDirectory.set(outputDirectory.dir("assets"))
 }
 androidComponents.onVariants { variant ->
     variant.sources.assets?.addGeneratedSourceDirectory(preparePaddleOcr, PreparePaddleOcrTask::getAssetsDirectory)
+    variant.sources.assets?.addGeneratedSourceDirectory(preparePaddleOcrManga, PreparePaddleOcrTask::getAssetsDirectory)
     variant.sources.assets?.addGeneratedSourceDirectory(prepareSherpa, PrepareSherpaTask::getAssetsDirectory)
 }
 
@@ -374,6 +394,7 @@ tasks.named("preBuild") {
     dependsOn(generateUniffiKotlin)
     dependsOn(prepareSherpa)
     dependsOn(preparePaddleOcr)
+    dependsOn(preparePaddleOcrManga)
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {

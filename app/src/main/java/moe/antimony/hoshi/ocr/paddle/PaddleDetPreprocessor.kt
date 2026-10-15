@@ -41,27 +41,18 @@ object PaddleDetPreprocessor {
     }
 
     /** Bitmap-free entry point for tests and reuse of an extracted plane. */
-    fun preprocessBgr(bgr: ByteArray, originalW: Int, originalH: Int): DetNetworkInput {
-        var ratio = if (minOf(originalH, originalW) < LIMIT_SIDE_LEN) {
-            LIMIT_SIDE_LEN.toDouble() / minOf(originalH, originalW)
-        } else {
-            1.0
+    fun preprocessBgr(
+        bgr: ByteArray,
+        originalW: Int,
+        originalH: Int,
+        resize: PaddleDetResize = PaddleDetResize.Limited,
+    ): DetNetworkInput {
+        val (scaledH, scaledW) = when (resize) {
+            PaddleDetResize.Limited -> limitedSize(originalW, originalH)
+            is PaddleDetResize.LongSide -> longSideSize(originalW, originalH, resize.side)
         }
-        var newH = (originalH * ratio).toInt()
-        var newW = (originalW * ratio).toInt()
-        if (maxOf(newH, newW) > MAX_SIDE_LIMIT) {
-            ratio = MAX_SIDE_LIMIT.toDouble() / maxOf(newH, newW)
-            newH = (newH * ratio).toInt()
-            newW = (newW * ratio).toInt()
-        }
-        // High-detail retries retain source detail for crops without doubling detector work.
-        if (newH.toLong() * newW > MAX_INPUT_PIXELS) {
-            val pixelRatio = kotlin.math.sqrt(MAX_INPUT_PIXELS.toDouble() / (newH.toDouble() * newW))
-            newH = (newH * pixelRatio).toInt()
-            newW = (newW * pixelRatio).toInt()
-        }
-        newH = maxOf(roundHalfToEven(newH / 32.0) * 32, 32)
-        newW = maxOf(roundHalfToEven(newW / 32.0) * 32, 32)
+        val newH = maxOf(roundHalfToEven(scaledH / 32.0) * 32, 32)
+        val newW = maxOf(roundHalfToEven(scaledW / 32.0) * 32, 32)
 
         val resized = if (newW == originalW && newH == originalH) {
             bgr
@@ -84,5 +75,37 @@ object PaddleDetPreprocessor {
             originalW,
             originalH
         )
+    }
+
+    private fun limitedSize(originalW: Int, originalH: Int): Pair<Double, Double> {
+        var ratio = if (minOf(originalH, originalW) < LIMIT_SIDE_LEN) {
+            LIMIT_SIDE_LEN.toDouble() / minOf(originalH, originalW)
+        } else {
+            1.0
+        }
+        var newH = (originalH * ratio).toInt()
+        var newW = (originalW * ratio).toInt()
+        if (maxOf(newH, newW) > MAX_SIDE_LIMIT) {
+            ratio = MAX_SIDE_LIMIT.toDouble() / maxOf(newH, newW)
+            newH = (newH * ratio).toInt()
+            newW = (newW * ratio).toInt()
+        }
+        // High-detail retries retain source detail for crops without doubling detector work.
+        if (newH.toLong() * newW > MAX_INPUT_PIXELS) {
+            val pixelRatio = kotlin.math.sqrt(MAX_INPUT_PIXELS.toDouble() / (newH.toDouble() * newW))
+            newH = (newH * pixelRatio).toInt()
+            newW = (newW * pixelRatio).toInt()
+        }
+        return newH.toDouble() to newW.toDouble()
+    }
+
+    private fun longSideSize(originalW: Int, originalH: Int, side: Int): Pair<Double, Double> {
+        val longSide = maxOf(originalW, originalH).toDouble()
+        val ratio = if (longSide / minOf(originalW, originalH) > 2.0) {
+            minOf(1.0, kotlin.math.sqrt(0.75 * side * side / (originalW.toDouble() * originalH)))
+        } else {
+            side / longSide
+        }
+        return originalH * ratio to originalW * ratio
     }
 }

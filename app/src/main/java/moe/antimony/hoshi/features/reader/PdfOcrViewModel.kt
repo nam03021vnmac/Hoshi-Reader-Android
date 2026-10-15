@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.ocr.pdf.OcrPageRecord
+import moe.antimony.hoshi.ocr.pdf.PdfOcrModel
 import moe.antimony.hoshi.ocr.pdf.PdfOcrReaderRepository
 import moe.antimony.hoshi.ocr.pdf.PdfOcrResult
 import moe.antimony.hoshi.ocr.pdf.PdfOcrRequestQueue
@@ -92,6 +93,7 @@ internal class PdfOcrViewModel @Inject constructor(
     private var activePage: Int? = null
     private var requeueActive = false
     private var sourceHashJob: Deferred<String?>? = null
+    private var ocrModelJob: Deferred<PdfOcrModel>? = null
     private val probes = mutableMapOf<Int, PdfTextProbe>()
     private val requestCounter = AtomicInteger(0)
 
@@ -107,11 +109,26 @@ internal class PdfOcrViewModel @Inject constructor(
             activePage = null
             requeueActive = false
             sourceHashJob?.cancel()
+            ocrModelJob?.cancel()
             queue.clear()
             probes.clear()
             queue.updateViewport(0, 0, pageCount)
             _uiState.update { PdfOcrUiState(sessionId = UUID.randomUUID().toString()) }
             startSourceHash(pdfFile)
+            startOcrModel(bookRoot)
+        }
+    }
+
+    /** Shelf membership is read once per opened book; later shelf edits apply on reopen. */
+    private fun startOcrModel(root: File?) {
+        ocrModelJob = viewModelScope.async {
+            try {
+                repository.ocrModelFor(root)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                PdfOcrModel.Standard
+            }
         }
     }
 
@@ -250,7 +267,7 @@ internal class PdfOcrViewModel @Inject constructor(
                 false
             }
             if (saved) {
-                val pinnedRecord = repository.cachedPage(sourceHash, pageIndex)
+                val pinnedRecord = repository.cachedPage(sourceHash, pageIndex, ocrModelJob?.await() ?: PdfOcrModel.Standard)
                 _uiState.update { current ->
                     val page = current.page(pageIndex)
                     if (current.sessionId != state.sessionId) current else
@@ -312,6 +329,7 @@ internal class PdfOcrViewModel @Inject constructor(
         val root = bookRoot
         val session = _uiState.value.sessionId
         val hashJob = sourceHashJob ?: return
+        val modelJob = ocrModelJob ?: return
         val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 yield() // Collect same-frame probes before choosing visible work over prefetch.
@@ -325,11 +343,13 @@ internal class PdfOcrViewModel @Inject constructor(
                     queue.clear()
                     return@launch
                 }
+                val model = modelJob.await()
+                ensureActive()
                 while (true) {
                     val (pageIndex, request) = queue.poll() ?: break
                     activePage = pageIndex
                     requeueActive = false
-                    runRequest(file, root, sourceHash, session, pageIndex, request)
+                    runRequest(file, root, sourceHash, model, session, pageIndex, request)
                     activePage = null
                 }
             } finally {
@@ -350,7 +370,15 @@ internal class PdfOcrViewModel @Inject constructor(
         startWorker()
     }
 
-    private suspend fun runRequest(file: File, root: File?, sourceHash: String, session: String, pageIndex: Int, request: Request) {
+    private suspend fun runRequest(
+        file: File,
+        root: File?,
+        sourceHash: String,
+        model: PdfOcrModel,
+        session: String,
+        pageIndex: Int,
+        request: Request,
+    ) {
         val requestId = request.id
         fun updatePage(block: (PdfOcrPageUiState) -> PdfOcrPageUiState) {
             _uiState.update { state ->
@@ -368,6 +396,7 @@ internal class PdfOcrViewModel @Inject constructor(
                     cssWidth = request.probe.cssWidth,
                     cssHeight = request.probe.cssHeight,
                     highRes = request.highRes,
+                    model = model,
                     force = request.force,
                     onStage = { stage ->
                         updatePage { it.copy(status = when (stage) {
@@ -411,6 +440,7 @@ internal class PdfOcrViewModel @Inject constructor(
     override fun onCleared() {
         worker?.cancel()
         sourceHashJob?.cancel()
+        ocrModelJob?.cancel()
         queue.clear()
     }
 }

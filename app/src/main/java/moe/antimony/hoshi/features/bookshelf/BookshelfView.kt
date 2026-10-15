@@ -70,6 +70,7 @@ import moe.antimony.hoshi.ui.HoshiButton as Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import moe.antimony.hoshi.ui.HoshiDropdownMenu as DropdownMenu
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -557,6 +558,7 @@ fun BookshelfView(
             onDeleteShelf = booksViewModel::deleteShelf,
             onRenameShelf = booksViewModel::renameShelf,
             onMoveShelf = booksViewModel::moveShelf,
+            onShelfMangaChange = booksViewModel::setShelfManga,
             onDismiss = { showShelfManagement = false },
         )
     }
@@ -1928,6 +1930,7 @@ internal fun ShelfManagementDialog(
     onDeleteShelf: (String) -> Unit,
     onRenameShelf: (String, String) -> Unit,
     onMoveShelf: (Int, Int) -> Unit,
+    onShelfMangaChange: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var newShelfName by remember { mutableStateOf("") }
@@ -2040,6 +2043,7 @@ internal fun ShelfManagementDialog(
                             onDeleteShelf = onDeleteShelf,
                             onRenameShelf = onRenameShelf,
                             onMoveShelf = onMoveShelf,
+                            onShelfMangaChange = onShelfMangaChange,
                         )
                     }
                 }
@@ -2087,6 +2091,7 @@ private fun ShelfManagementShelfRow(
     onDeleteShelf: (String) -> Unit,
     onRenameShelf: (String, String) -> Unit,
     onMoveShelf: (Int, Int) -> Unit,
+    onShelfMangaChange: (String, Boolean) -> Unit,
 ) {
     var isRenaming by remember(shelf.name) { mutableStateOf(false) }
     var draftName by remember(shelf.name) { mutableStateOf(shelf.name) }
@@ -2141,12 +2146,20 @@ private fun ShelfManagementShelfRow(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = shelf.name,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = shelf.name,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (shelf.isManga) {
+                    Text(
+                        text = stringResource(R.string.bookshelf_shelf_manga_ocr),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             Box {
                 IconButton(onClick = { menuExpanded = true }) {
                     Icon(Icons.Rounded.MoreVert, contentDescription = stringResource(R.string.action_more))
@@ -2161,6 +2174,17 @@ private fun ShelfManagementShelfRow(
                         onClick = {
                             draftName = shelf.name
                             isRenaming = true
+                            menuExpanded = false
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.bookshelf_shelf_contains_manga)) },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Rounded.MenuBook, contentDescription = null) },
+                        trailingIcon = {
+                            Checkbox(checked = shelf.isManga, onCheckedChange = null)
+                        },
+                        onClick = {
+                            onShelfMangaChange(shelf.name, !shelf.isManga)
                             menuExpanded = false
                         },
                     )

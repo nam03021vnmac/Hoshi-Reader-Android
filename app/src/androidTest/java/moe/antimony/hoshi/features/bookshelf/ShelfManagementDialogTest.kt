@@ -52,6 +52,7 @@ class ShelfManagementDialogTest {
                         onDeleteShelf = {},
                         onRenameShelf = { _, _ -> },
                         onMoveShelf = { _, _ -> },
+                        onShelfMangaChange = { _, _ -> },
                         onDismiss = {},
                     )
                 }
@@ -117,6 +118,7 @@ class ShelfManagementDialogTest {
                         onDeleteShelf = {},
                         onRenameShelf = { _, _ -> },
                         onMoveShelf = onMoveShelf,
+                        onShelfMangaChange = { _, _ -> },
                         onDismiss = {},
                     )
                 }

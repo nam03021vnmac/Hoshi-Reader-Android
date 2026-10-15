@@ -1014,6 +1014,17 @@ class BookshelfViewModelTest {
     }
 
     @Test
+    fun setShelfMangaDelegatesToRepositoryAndReloads() {
+        val repository = FakeBookshelfRepository()
+        val viewModel = BookshelfViewModel(repository, testScope())
+
+        viewModel.setShelfManga("Manga", true)
+
+        assertEquals(listOf("Manga" to true), repository.mangaShelfChanges)
+        assertEquals(listOf(BookSortOption.Recent), repository.loadRequests)
+    }
+
+    @Test
     fun renameShelfListPreservesMembershipAndRejectsInvalidNames() {
         val shelves = listOf(
             BookShelf(name = "Manga", bookIds = listOf("book-a")),
@@ -1415,6 +1426,7 @@ class BookshelfViewModelTest {
         val deletedShelves = mutableListOf<String>()
         val renamedShelves = mutableListOf<Pair<String, String>>()
         val movedShelves = mutableListOf<Pair<Int, Int>>()
+        val mangaShelfChanges = mutableListOf<Pair<String, Boolean>>()
         val markedReadEntries = mutableListOf<BookEntry>()
         val importedRemoteEntries = mutableListOf<ImportedRemoteBook>()
         val deletedRemoteEntries = mutableListOf<RemoteBookEntry>()
@@ -1521,6 +1533,10 @@ class BookshelfViewModelTest {
 
         override suspend fun moveShelf(fromIndex: Int, toIndex: Int) {
             movedShelves += fromIndex to toIndex
+        }
+
+        override suspend fun setShelfManga(name: String, isManga: Boolean) {
+            mangaShelfChanges += name to isManga
         }
 
         override suspend fun markRead(entry: BookEntry) {

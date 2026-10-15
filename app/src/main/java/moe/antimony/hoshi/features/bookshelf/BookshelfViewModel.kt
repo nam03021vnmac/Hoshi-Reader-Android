@@ -511,6 +511,13 @@ internal class BookshelfViewModel : ViewModel {
         }
     }
 
+    fun setShelfManga(name: String, isManga: Boolean) {
+        workScope.launch {
+            repository.setShelfManga(name, isManga)
+            reloadBookEntriesSync()
+        }
+    }
+
     fun markRead(entry: BookEntry) {
         workScope.launch {
             repository.markRead(entry)

@@ -201,6 +201,8 @@
     <string name="bookshelf_create_shelf_failed">无法创建书架，请重试。</string>
     <string name="bookshelf_shelf_name">书架名称</string>
     <string name="bookshelf_add_shelf">添加书架</string>
+    <string name="bookshelf_shelf_contains_manga">包含漫画</string>
+    <string name="bookshelf_shelf_manga_ocr">PDF 使用漫画 OCR</string>
     <string name="bookshelf_empty_title">没有书籍</string>
     <string name="bookshelf_empty_message">使用 + 按钮导入 EPUB 或 PDF 开始阅读。</string>
     <string name="bookshelf_selected">已选择</string>

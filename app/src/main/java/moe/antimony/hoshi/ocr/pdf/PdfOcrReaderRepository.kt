@@ -5,7 +5,8 @@ import java.io.File
 /** Reader-facing OCR boundary; bitmap/model/store lifetimes stay in the repository. */
 interface PdfOcrReaderRepository {
     suspend fun sourceHashFor(pdfFile: File): String?
-    suspend fun cachedPage(sourceHash: String, pageIndex: Int): OcrPageRecord?
+    suspend fun ocrModelFor(bookRoot: File?): PdfOcrModel
+    suspend fun cachedPage(sourceHash: String, pageIndex: Int, model: PdfOcrModel): OcrPageRecord?
     suspend fun hasPinnedPage(sourceHash: String, pageIndex: Int): Boolean
     suspend fun ocrPage(
         pdfFile: File,
@@ -15,6 +16,7 @@ interface PdfOcrReaderRepository {
         cssWidth: Double,
         cssHeight: Double,
         highRes: Boolean,
+        model: PdfOcrModel,
         force: Boolean = false,
         onStage: (PdfOcrStage) -> Unit = {},
     ): PdfOcrResult

@@ -12,9 +12,9 @@ import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.*;
 
 /**
- * Build-time only: downloads pinned official PP-OCRv6_small ONNX weights plus
- * the recognition config (character dictionary) and stages them as generated
- * APK assets. Every artifact is verified by exact byte size and SHA-256
+ * Build-time only: downloads pinned PP-OCRv6 ONNX weights plus the recognition
+ * character dictionary source and stages them as generated APK assets under
+ * {@code assetPath}. Every artifact is verified by exact byte size and SHA-256
  * before publication, so the bundled models always match the pinned release.
  */
 public abstract class PreparePaddleOcrTask extends DefaultTask {
@@ -27,6 +27,10 @@ public abstract class PreparePaddleOcrTask extends DefaultTask {
     @Input public abstract Property<String> getRecConfigUrl();
     @Input public abstract Property<String> getRecConfigSha256();
     @Input public abstract Property<Long> getRecConfigBytes();
+    /** Asset directory holding {@code det/inference.onnx} and {@code rec/}. */
+    @Input public abstract Property<String> getAssetPath();
+    /** Recognition dictionary source name inside {@code rec/}. */
+    @Input public abstract Property<String> getRecConfigFileName();
     @OutputDirectory public abstract DirectoryProperty getOutputDirectory();
     @Internal public abstract DirectoryProperty getAssetsDirectory();
 
@@ -89,15 +93,16 @@ public abstract class PreparePaddleOcrTask extends DefaultTask {
     @TaskAction public void prepare() throws Exception {
         File root = getOutputDirectory().get().getAsFile();
         File assets = new File(root, "assets");
-        File detDir = new File(assets, "ocr/paddle/det");
-        File recDir = new File(assets, "ocr/paddle/rec");
+        File modelDir = new File(assets, getAssetPath().get());
+        File detDir = new File(modelDir, "det");
+        File recDir = new File(modelDir, "rec");
         Files.createDirectories(detDir.toPath());
         Files.createDirectories(recDir.toPath());
         fetch(new File(detDir, "inference.onnx"),
                 getDetUrl().get(), getDetSha256().get(), getDetBytes().get());
         fetch(new File(recDir, "inference.onnx"),
                 getRecUrl().get(), getRecSha256().get(), getRecBytes().get());
-        fetch(new File(recDir, "inference.yml"),
+        fetch(new File(recDir, getRecConfigFileName().get()),
                 getRecConfigUrl().get(), getRecConfigSha256().get(), getRecConfigBytes().get());
     }
 }

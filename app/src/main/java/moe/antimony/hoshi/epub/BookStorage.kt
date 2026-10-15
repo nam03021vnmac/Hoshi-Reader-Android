@@ -3,6 +3,8 @@ package moe.antimony.hoshi.epub
 
 import android.content.ContentResolver
 import android.net.Uri
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.util.UUID
@@ -55,6 +57,10 @@ data class BookMetadata(
 data class BookShelf(
     val name: String,
     val bookIds: List<String>,
+    /** Android-only: PDFs on this shelf use the manga OCR model. Omitted when false. */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val isManga: Boolean = false,
 )
 
 data class BookEntry(

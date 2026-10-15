@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import moe.antimony.hoshi.ocr.paddle.PaddleOcrConfiguration
 import moe.antimony.hoshi.ocr.paddle.PaddleOcrEngine
+import moe.antimony.hoshi.ocr.paddle.PaddleOcrModelSpec
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -34,6 +35,7 @@ class PaddleOcrBenchmarkTest {
         val threads = args.getString("ocrThreads")?.split(',')?.map { it.toInt() } ?: listOf(1, 2, 4)
         val batches = args.getString("ocrBatches")?.split(',')?.map { it.toInt() } ?: listOf(1, 2, 4)
         val providers = if (args.getString("ocrXnnpack") == "true") listOf(false, true) else listOf(false)
+        val spec = if (args.getString("ocrModel") == "manga") PaddleOcrModelSpec.Manga else PaddleOcrModelSpec.Standard
         val rows = listOf("今日は良い天気です", "日本語の本を読みます", "猫と犬が庭で遊んでいます", "明日は図書館へ行きます")
         val bitmap = Bitmap.createBitmap(900, 1200, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -41,12 +43,12 @@ class PaddleOcrBenchmarkTest {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 36f }
         rows.forEachIndexed { i, row -> canvas.drawText(row, 60f, 160f + i * 130f, paint) }
         val report = JSONObject().put("device", Build.MODEL).put("sdk", Build.VERSION.SDK_INT)
-            .put("abi", Build.SUPPORTED_ABIS.first()).put("syntheticOnly", true)
+            .put("abi", Build.SUPPORTED_ABIS.first()).put("syntheticOnly", true).put("engine", spec.engineId)
         val results = JSONArray()
         var baselineText: List<String>? = null
         try {
             for (xnnpack in providers) for (threadCount in threads) for (batchSize in batches) {
-                val engine = PaddleOcrEngine(context, Dispatchers.IO, PaddleOcrConfiguration(threadCount, batchSize, xnnpack))
+                val engine = PaddleOcrEngine(context, Dispatchers.IO, PaddleOcrConfiguration(threadCount, batchSize, xnnpack), spec)
                 try {
                     val samples = mutableListOf<Double>()
                     var coldMs = 0.0

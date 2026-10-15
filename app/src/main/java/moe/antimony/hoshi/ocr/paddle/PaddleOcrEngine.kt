@@ -3,16 +3,12 @@ package moe.antimony.hoshi.ocr.paddle
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
-import dagger.hilt.android.qualifiers.ApplicationContext
 import java.nio.FloatBuffer
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import moe.antimony.hoshi.di.IoDispatcher
 import moe.antimony.hoshi.ocr.OcrDirection
 import moe.antimony.hoshi.ocr.OcrEngine
 import moe.antimony.hoshi.ocr.OcrPixelQuad
@@ -27,8 +23,8 @@ import kotlin.math.max
 private const val PaddleOcrTag = "PaddleOcr"
 
 /**
- * On-device PP-OCRv6_small backend (detection + CTC recognition on
- * ONNX Runtime, dependency-free image math, bundled official weights).
+ * On-device PP-OCRv6 backend (detection + CTC recognition on ONNX Runtime,
+ * dependency-free image math, bundled weights described by [spec]).
  *
  * Detection boxes are perspective-cropped per line; tall crops are rotated
  * before recognition, which also yields real HORIZONTAL/VERTICAL direction
@@ -36,14 +32,14 @@ private const val PaddleOcrTag = "PaddleOcr"
  * produced by the CTC head, so lines carry line quads only and downstream
  * geometry stays marked as line estimates.
  */
-@Singleton
-class PaddleOcrEngine @Inject constructor(
-    @param:ApplicationContext private val context: Context,
-    @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+class PaddleOcrEngine(
+    private val context: Context,
+    private val ioDispatcher: CoroutineDispatcher,
     private val configuration: PaddleOcrConfiguration = PaddleOcrConfiguration(),
+    private val spec: PaddleOcrModelSpec = PaddleOcrModelSpec.Standard,
 ) : OcrEngine {
-    override val engineId: String = "paddle-ppocrv6-small"
-    override val engineVersion: String = "20260618"
+    override val engineId: String = spec.engineId
+    override val engineVersion: String = spec.engineVersion
 
     private val mutex = Mutex()
     private var sessions: OrtSessions? = null
@@ -70,7 +66,7 @@ class PaddleOcrEngine @Inject constructor(
             coroutineContext.ensureActive()
             val sourceBgr = timings.measure("pixels") { bitmapToBgr(bitmap) }
             val detInput = timings.measure("detPre") {
-                PaddleDetPreprocessor.preprocessBgr(sourceBgr, bitmap.width, bitmap.height)
+                PaddleDetPreprocessor.preprocessBgr(sourceBgr, bitmap.width, bitmap.height, spec.detResize)
             }
             coroutineContext.ensureActive()
             val (prob, probShape) = timings.measure("detInference") { mutex.withLock {
@@ -88,6 +84,9 @@ class PaddleOcrEngine @Inject constructor(
                 mapHeight = mapH,
                 originalWidth = detInput.originalWidth,
                 originalHeight = detInput.originalHeight,
+                thresh = spec.dbThresh,
+                boxThresh = spec.dbBoxThresh,
+                unclipRatio = spec.dbUnclipRatio,
             ) }
             if (boxes.isEmpty()) {
                 return@withContext OcrRecognizeOutcome.Success(
@@ -111,7 +110,7 @@ class PaddleOcrEngine @Inject constructor(
                     cropLine(sourceBgr, bitmap.width, bitmap.height, ordered[index])?.let { index to it }
                 } }
                 if (crops.isEmpty()) continue
-                val batch = timings.measure("recPre") { PaddleRecPreprocessor.preprocessBatch(crops.map { it.second.first }) }
+                val batch = timings.measure("recPre") { PaddleRecPreprocessor.preprocessBatch(crops.map { it.second.first }, spec.recInputBgr) }
                 val decoded = mutex.withLock {
                     withSessionOutput(holder, det = false, batch.tensor,
                         longArrayOf(batch.batch.toLong(), 3, 48, batch.width.toLong()), timings) { logits, shape ->
@@ -142,7 +141,7 @@ class PaddleOcrEngine @Inject constructor(
             Log.w(PaddleOcrTag, "recognize failed: ${error.message}")
             OcrRecognizeOutcome.Failure(error.message?.ifBlank { null } ?: "OCR failed", retryable = true)
         } finally {
-            Log.d(PaddleOcrTag, "timing width=${bitmap.width} height=${bitmap.height} threads=${configuration.threads} batch=${configuration.recognitionBatchSize} xnnpack=${configuration.useXnnpack} ${timings.summary()}")
+            Log.d(PaddleOcrTag, "timing model=$engineId width=${bitmap.width} height=${bitmap.height} threads=${configuration.threads} batch=${configuration.recognitionBatchSize} xnnpack=${configuration.useXnnpack} ${timings.summary()}")
         }
     }
 
@@ -158,10 +157,13 @@ class PaddleOcrEngine @Inject constructor(
 
     private suspend fun ensureSessions(): OrtSessions? = mutex.withLock {
         sessions?.let { return it }
-        val detBytes = readAsset(PaddleOcrAssets.DET_MODEL) ?: return null
-        val recBytes = readAsset(PaddleOcrAssets.REC_MODEL) ?: return null
-        val yml = readAssetText(PaddleOcrAssets.REC_CONFIG) ?: return null
-        val chars = PaddleDict.parseCharacterDict(yml, PaddleOcrAssets.REC_CONFIG)
+        val detBytes = readAsset(spec.detModelAsset) ?: return null
+        val recBytes = readAsset(spec.recModelAsset) ?: return null
+        val dict = readAssetText(spec.dictAsset) ?: return null
+        val chars = when (spec.dictFormat) {
+            PaddleDictFormat.InferenceYaml -> PaddleDict.parseCharacterDict(dict, spec.dictAsset)
+            PaddleDictFormat.PlainText -> PaddleDict.parsePlainDict(dict, spec.dictAsset)
+        }
         val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
         try {
             val options = ai.onnxruntime.OrtSession.SessionOptions().apply {
@@ -300,11 +302,4 @@ class PaddleOcrEngine @Inject constructor(
             x3 = ordered[3].x.toFloat(), y3 = ordered[3].y.toFloat(),
         )
     }
-}
-
-/** Bundled PP-OCRv6_small asset locations inside the APK. */
-object PaddleOcrAssets {
-    const val DET_MODEL = "ocr/paddle/det/inference.onnx"
-    const val REC_MODEL = "ocr/paddle/rec/inference.onnx"
-    const val REC_CONFIG = "ocr/paddle/rec/inference.yml"
 }

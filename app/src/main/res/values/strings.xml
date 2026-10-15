@@ -203,6 +203,8 @@
     <string name="bookshelf_create_shelf_failed">Failed to create the shelf. Try again.</string>
     <string name="bookshelf_shelf_name">Shelf name</string>
     <string name="bookshelf_add_shelf">Add shelf</string>
+    <string name="bookshelf_shelf_contains_manga">Contains manga</string>
+    <string name="bookshelf_shelf_manga_ocr">Manga OCR for PDFs</string>
     <string name="bookshelf_empty_title">No Books</string>
     <string name="bookshelf_empty_message">Import an EPUB or PDF using the + button to start reading.</string>
     <string name="bookshelf_selected">Selected</string>

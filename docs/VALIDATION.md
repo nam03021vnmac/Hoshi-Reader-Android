@@ -120,7 +120,8 @@ adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am instrument -w -e class moe.antimony.hoshi.ocr.PaddleOcrBenchmarkTest -e ocrBenchmark true -e ocrRuns 5 -e ocrThreads 1,2,4 -e ocrBatches 1,2,4 moe.antimony.hoshi.debug.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-Add `-e ocrXnnpack true` to include that provider. The test writes a uniquely named
+Add `-e ocrXnnpack true` to include that provider. Add `-e ocrModel manga` to this
+or `PdfOcrCorpusBenchmarkTest` to run the manga-shelf model instead of the standard one. The test writes a uniquely named
 JSON report in the target app's cache and logs its path with `PdfOcrBenchmark`.
 Require the final instrumentation `OK` summary. Generated fixtures do not replace
 the labeled-page accuracy/device latency gates in `docs/OCR_ARCHITECTURE.md`.

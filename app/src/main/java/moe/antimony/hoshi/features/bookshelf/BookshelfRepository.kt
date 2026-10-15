@@ -76,6 +76,7 @@ internal interface BookshelfRepository {
     suspend fun deleteShelf(name: String)
     suspend fun renameShelf(oldName: String, newName: String)
     suspend fun moveShelf(fromIndex: Int, toIndex: Int)
+    suspend fun setShelfManga(name: String, isManga: Boolean)
     suspend fun markRead(entry: BookEntry)
     suspend fun renameBook(entry: BookEntry, title: String?)
     suspend fun setBookProfile(entry: BookEntry, profileId: String?)
@@ -307,6 +308,14 @@ internal class AndroidBookshelfRepository @Inject constructor(
         val shelf = shelves.removeAt(fromIndex)
         shelves.add(toIndex, shelf)
         bookRepository.saveShelves(shelves)
+    }
+
+    override suspend fun setShelfManga(name: String, isManga: Boolean) = withContext(ioDispatcher) {
+        val shelves = bookRepository.loadShelves()
+        val updatedShelves = shelves.map { if (it.name == name) it.copy(isManga = isManga) else it }
+        if (updatedShelves != shelves) {
+            bookRepository.saveShelves(updatedShelves)
+        }
     }
 
     override suspend fun markRead(entry: BookEntry) = withContext(ioDispatcher) {

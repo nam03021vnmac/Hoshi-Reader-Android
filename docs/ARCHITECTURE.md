@@ -303,7 +303,13 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   opt-in 300 DPI retry capped at 6 MP, while detector input stays bounded near
   3 MP), bundled PP-OCRv6_small Japanese recognition on
   ONNX Runtime (detection plus CTC recognition from build-time pinned
-  official weights, no OpenCV), deterministic
+  official weights, no OpenCV); books on a shelf whose `shelves.json` entry
+  carries the Android-only `isManga` flag instead use the bundled
+  PP-OCRv6_manga v0.2 pair (`PaddleOcrModelSpec.Manga`: 960 px long-side
+  detector input, its recommended DB thresholds, plain-text dictionary). The
+  `PdfOcrViewModel` resolves the model once per opened book, cache keys include
+  the engine id, and only the last used engine keeps ONNX sessions loaded;
+  deterministic
   Japanese layout/ruby postprocessing, and a versioned store under
   `noBackupFilesDir/pdf-ocr/<source-sha256>/`. The entry-scoped
   `PdfOcrViewModel` queues missing-text pages automatically through a single

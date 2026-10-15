@@ -25,12 +25,12 @@ class PdfOcrRepositoryDeviceTest {
         val fixture = fixture()
         try {
             val engine = FakeEngine().apply { block = true }
-            val repository = PdfOcrRepository(PdfOcrRasterizer(Dispatchers.IO), engine,
+            val repository = PdfOcrRepository(PdfOcrRasterizer(Dispatchers.IO), PdfOcrEngines(engine, engine), { PdfOcrModel.Standard },
                 JapaneseOcrPostprocessor(), PdfOcrStore(File(fixture.root, "ocr"), Dispatchers.IO),
                 BookWorkRegistry(), Dispatchers.IO)
             val hash = repository.sourceHashFor(fixture.pdf)!!
             suspend fun page() = repository.ocrPage(fixture.pdf, fixture.root, hash, 0,
-                595 * (96.0 / 72), 842 * (96.0 / 72), false)
+                595 * (96.0 / 72), 842 * (96.0 / 72), false, PdfOcrModel.Standard)
             val first = async { page() }
             engine.entered.await()
             val duplicate = async(start = CoroutineStart.UNDISPATCHED) { page() }
@@ -49,11 +49,11 @@ class PdfOcrRepositoryDeviceTest {
             val engine = FakeEngine()
             val registry = BookWorkRegistry()
             val store = PdfOcrStore(File(fixture.root, "ocr"), Dispatchers.IO)
-            val repository = PdfOcrRepository(PdfOcrRasterizer(Dispatchers.IO), engine,
+            val repository = PdfOcrRepository(PdfOcrRasterizer(Dispatchers.IO), PdfOcrEngines(engine, engine), { PdfOcrModel.Standard },
                 JapaneseOcrPostprocessor(), store, registry, Dispatchers.IO)
             val hash = repository.sourceHashFor(fixture.pdf)!!
             suspend fun page(high: Boolean = false, force: Boolean = false) = repository.ocrPage(
-                fixture.pdf, fixture.root, hash, 0, 595 * (96.0 / 72), 842 * (96.0 / 72), high, force,
+                fixture.pdf, fixture.root, hash, 0, 595 * (96.0 / 72), 842 * (96.0 / 72), high, PdfOcrModel.Standard, force,
             ) as PdfOcrResult.Ready
             val normal = page()
             assertTrue(engine.lastBitmap!!.isRecycled)
@@ -66,7 +66,7 @@ class PdfOcrRepositoryDeviceTest {
             assertTrue(repository.pinHighlightForRevision("highlight", hash, 0, normal.record.revisionId))
             assertEquals(normal.record.revisionId, page(high = true, force = true).record.revisionId)
             assertEquals(2, engine.calls)
-            registry.delete(fixture.root) { assertNull(store.loadActive(hash, repository.pipelineKey(), 0)) }
+            registry.delete(fixture.root) { assertNull(store.loadActive(hash, repository.pipelineKey(PdfOcrModel.Standard), 0)) }
         } finally { fixture.root.deleteRecursively() }
     }
 
@@ -76,17 +76,17 @@ class PdfOcrRepositoryDeviceTest {
             val engine = FakeEngine().apply { block = true }
             val registry = BookWorkRegistry()
             val store = PdfOcrStore(File(fixture.root, "ocr"), Dispatchers.IO)
-            val repository = PdfOcrRepository(PdfOcrRasterizer(Dispatchers.IO), engine,
+            val repository = PdfOcrRepository(PdfOcrRasterizer(Dispatchers.IO), PdfOcrEngines(engine, engine), { PdfOcrModel.Standard },
                 JapaneseOcrPostprocessor(), store, registry, Dispatchers.IO)
             val hash = repository.sourceHashFor(fixture.pdf)!!
             val request = async {
-                repository.ocrPage(fixture.pdf, fixture.root, hash, 0, 595 * (96.0 / 72), 842 * (96.0 / 72), false)
+                repository.ocrPage(fixture.pdf, fixture.root, hash, 0, 595 * (96.0 / 72), 842 * (96.0 / 72), false, PdfOcrModel.Standard)
             }
             engine.entered.await()
             registry.delete(fixture.root) {
                 assertTrue(engine.finished)
                 assertTrue(engine.lastBitmap!!.isRecycled)
-                assertNull(store.loadActive(hash, repository.pipelineKey(), 0))
+                assertNull(store.loadActive(hash, repository.pipelineKey(PdfOcrModel.Standard), 0))
             }
             assertTrue(request.isCancelled)
         } finally { fixture.root.deleteRecursively() }

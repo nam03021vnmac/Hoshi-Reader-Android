@@ -19,7 +19,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.di.IoDispatcher
 import moe.antimony.hoshi.epub.BookWorkRegistry
-import moe.antimony.hoshi.ocr.OcrEngine
 import moe.antimony.hoshi.ocr.OcrRecognizeOutcome
 import moe.antimony.hoshi.ocr.OcrTimings
 import moe.antimony.hoshi.ocr.layout.JapaneseOcrPostprocessor
@@ -44,7 +43,8 @@ private const val PdfOcrTag = "PdfOcr"
 @Singleton
 class PdfOcrRepository @Inject constructor(
     private val rasterizer: PdfOcrRasterizer,
-    private val engine: OcrEngine,
+    private val engines: PdfOcrEngines,
+    private val modelSource: PdfOcrModelSource,
     private val postprocessor: JapaneseOcrPostprocessor,
     private val store: PdfOcrStore,
     private val workRegistry: BookWorkRegistry,
@@ -57,14 +57,18 @@ class PdfOcrRepository @Inject constructor(
     private val coordinatorMutex = Mutex()
     private val coordinators = mutableMapOf<File, AutoCloseable>()
     private val deletedSources = mutableSetOf<String>()
+    // Guarded by enginePermits: only the last used model keeps its sessions loaded.
+    private var loadedModel: PdfOcrModel? = null
 
     private data class CachedHash(val length: Long, val modified: Long, val hash: String)
 
-    fun pipelineKey(): String =
-        PdfOcrPipeline.pipelineKey(engine.engineId, engine.engineVersion)
+    fun pipelineKey(model: PdfOcrModel): String =
+        engines[model].let { PdfOcrPipeline.pipelineKey(it.engineId, it.engineVersion) }
 
-    fun configHash(highRes: Boolean): String =
-        PdfOcrPipeline.configHash(engine.engineId, engine.engineVersion, highRes)
+    fun configHash(model: PdfOcrModel, highRes: Boolean): String =
+        engines[model].let { PdfOcrPipeline.configHash(it.engineId, it.engineVersion, highRes) }
+
+    override suspend fun ocrModelFor(bookRoot: File?): PdfOcrModel = modelSource.modelFor(bookRoot)
 
     override suspend fun sourceHashFor(pdfFile: File): String? = withContext(ioDispatcher) {
         if (!pdfFile.isFile) return@withContext null
@@ -82,11 +86,13 @@ class PdfOcrRepository @Inject constructor(
         hash
     }
 
-    override suspend fun cachedPage(sourceHash: String, pageIndex: Int): OcrPageRecord? =
-        store.pinnedPage(sourceHash, pageIndex) ?: store.loadActive(sourceHash, pipelineKey(), pageIndex)?.takeIf {
+    override suspend fun cachedPage(sourceHash: String, pageIndex: Int, model: PdfOcrModel): OcrPageRecord? {
+        val engine = engines[model]
+        return store.pinnedPage(sourceHash, pageIndex) ?: store.loadActive(sourceHash, pipelineKey(model), pageIndex)?.takeIf {
             it.pipelineVersion == PdfOcrPipeline.VERSION && it.engineId == engine.engineId &&
-                it.engineVersion == engine.engineVersion && it.configHash == configHash(it.rasterPlan.highRes)
+                it.engineVersion == engine.engineVersion && it.configHash == configHash(model, it.rasterPlan.highRes)
         }
+    }
 
     override suspend fun hasPinnedPage(sourceHash: String, pageIndex: Int): Boolean = store.hasPinnedPage(sourceHash, pageIndex)
 
@@ -98,14 +104,15 @@ class PdfOcrRepository @Inject constructor(
         cssWidth: Double,
         cssHeight: Double,
         highRes: Boolean,
+        model: PdfOcrModel,
         force: Boolean,
         onStage: (PdfOcrStage) -> Unit,
     ): PdfOcrResult = coroutineScope {
-        val requestKey = "$sourceHash|$pageIndex"
+        val requestKey = "$sourceHash|$pageIndex|$model"
         var owner = false
         val request = jobsMutex.withLock {
             inFlight[requestKey] ?: async(start = CoroutineStart.LAZY) {
-                runPage(pdfFile, bookRoot, sourceHash, pageIndex, cssWidth, cssHeight, highRes, force, onStage)
+                runPage(pdfFile, bookRoot, sourceHash, pageIndex, cssWidth, cssHeight, highRes, model, force, onStage)
             }.also {
                 inFlight[requestKey] = it
                 owner = true
@@ -131,10 +138,12 @@ class PdfOcrRepository @Inject constructor(
         cssWidth: Double,
         cssHeight: Double,
         highRes: Boolean,
+        model: PdfOcrModel,
         force: Boolean,
         onStage: (PdfOcrStage) -> Unit,
     ): PdfOcrResult = withContext(ioDispatcher) {
         val timings = OcrTimings()
+        val engine = engines[model]
         ensureActive()
         synchronized(deletedSources) { if (sourceHash in deletedSources) throw CancellationException() }
         ensureCoordinator(bookRoot, sourceHash)
@@ -144,13 +153,17 @@ class PdfOcrRepository @Inject constructor(
         if (store.hasPinnedPage(sourceHash, pageIndex)) {
             return@withContext PdfOcrResult.Unavailable("Pinned OCR revision unavailable")
         }
-        if (!force) timings.measure("cache") { cachedPage(sourceHash, pageIndex) }?.let { cached ->
+        if (!force) timings.measure("cache") { cachedPage(sourceHash, pageIndex, model) }?.let { cached ->
             if (!highRes || cached.rasterPlan.highRes) return@withContext resultFor(cached)
         }
         ensureActive()
         // Bound the entire bitmap lifetime, including raster and postprocessing.
         timings.measure("queue") { enginePermits.acquire() }
         try {
+        if (loadedModel != model) {
+            loadedModel?.let { engines[it].close() }
+            loadedModel = model
+        }
         ensureActive()
         onStage(PdfOcrStage.Rasterizing)
         val raster = timings.measure("raster") { rasterizer.rasterize(pdfFile, pageIndex, highRes) }
@@ -219,7 +232,7 @@ class PdfOcrRepository @Inject constructor(
                         engineId = engine.engineId,
                         engineVersion = engine.engineVersion,
                         pipelineVersion = PdfOcrPipeline.VERSION,
-                        configHash = configHash(highRes),
+                        configHash = configHash(model, highRes),
                         pageGeometry = OcrPageGeometryRecord(
                             nativeWidthPt = raster.nativeWidthPt,
                             nativeHeightPt = raster.nativeHeightPt,
@@ -245,7 +258,7 @@ class PdfOcrRepository @Inject constructor(
                     synchronized(deletedSources) {
                         if (sourceHash in deletedSources) throw CancellationException()
                     }
-                    val saved = timings.measure("save") { store.save(record, pipelineKey()) }
+                    val saved = timings.measure("save") { store.save(record, pipelineKey(model)) }
                     if (!saved) return@withContext store.pinnedPage(sourceHash, pageIndex)?.let(::resultFor)
                         ?: PdfOcrResult.Failed("Could not save OCR result", retryable = true)
                     store.scheduleEviction()
@@ -257,7 +270,7 @@ class PdfOcrRepository @Inject constructor(
         }
         } finally {
             enginePermits.release()
-            Log.d(PdfOcrTag, "timing page=$pageIndex highRes=$highRes ${timings.summary()}")
+            Log.d(PdfOcrTag, "timing page=$pageIndex model=$model highRes=$highRes ${timings.summary()}")
         }
     }
 

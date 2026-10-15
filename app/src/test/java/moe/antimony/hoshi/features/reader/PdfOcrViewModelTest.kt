@@ -44,6 +44,24 @@ class PdfOcrViewModelTest {
         assertEquals(setOf(100), vm.uiState.value.pages.keys)
     }
 
+    @Test fun bookModelIsResolvedOnAttachAndUsedForEveryPage() = runTest(dispatcher) {
+        val repository = FakeRepository()
+        val mangaRoot = File("manga-book")
+        repository.mangaRoots += mangaRoot
+        val vm = PdfOcrViewModel(repository)
+        vm.attachBook(File("manga.pdf"), mangaRoot, 10)
+        vm.onTextProbe(probe(0))
+        advanceUntilIdle()
+        vm.retry(0, highRes = true)
+        advanceUntilIdle()
+        assertEquals(listOf(PdfOcrModel.Manga, PdfOcrModel.Manga), repository.calls.map { it.model })
+
+        vm.attachBook(File("novel.pdf"), File("novel-book"), 10)
+        vm.onTextProbe(probe(0))
+        advanceUntilIdle()
+        assertEquals(PdfOcrModel.Standard, repository.calls.last().model)
+    }
+
     @Test fun retryForcesNewInferenceAndKeepsOriginalProbeGeometry() = runTest(dispatcher) {
         val repository = FakeRepository()
         val vm = PdfOcrViewModel(repository)
@@ -137,7 +155,8 @@ class PdfOcrViewModelTest {
         assertNotNull(vm.uiState.value.page(0).error)
     }
 
-    private data class Call(val page: Int, val width: Double, val highRes: Boolean, val force: Boolean)
+    private data class Call(val page: Int, val width: Double, val highRes: Boolean, val force: Boolean,
+        val model: PdfOcrModel = PdfOcrModel.Standard)
 
     private class FakeRepository : PdfOcrReaderRepository {
         var hashCalls = 0
@@ -148,16 +167,20 @@ class PdfOcrViewModelTest {
         var blockFirst = false
         var pinRevision: String? = null
         var pinSucceeds = true
+        val mangaRoots = mutableSetOf<File>()
+        override suspend fun ocrModelFor(bookRoot: File?): PdfOcrModel =
+            if (bookRoot in mangaRoots) PdfOcrModel.Manga else PdfOcrModel.Standard
         override suspend fun sourceHashFor(pdfFile: File): String? {
             hashCalls++
             if (failHash) return null
             return hashGate?.await() ?: "a".repeat(64)
         }
         override suspend fun hasPinnedPage(sourceHash: String, pageIndex: Int): Boolean = pinRevision != null
-        override suspend fun cachedPage(sourceHash: String, pageIndex: Int): OcrPageRecord? = null
+        override suspend fun cachedPage(sourceHash: String, pageIndex: Int, model: PdfOcrModel): OcrPageRecord? = null
         override suspend fun ocrPage(pdfFile: File, bookRoot: File?, sourceHash: String, pageIndex: Int,
-            cssWidth: Double, cssHeight: Double, highRes: Boolean, force: Boolean, onStage: (PdfOcrStage) -> Unit): PdfOcrResult {
-            calls += Call(pageIndex, cssWidth, highRes, force)
+            cssWidth: Double, cssHeight: Double, highRes: Boolean, model: PdfOcrModel, force: Boolean,
+            onStage: (PdfOcrStage) -> Unit): PdfOcrResult {
+            calls += Call(pageIndex, cssWidth, highRes, force, model)
             if (blockFirst && calls.size == 1) awaitCancellation()
             onStage(PdfOcrStage.Rasterizing)
             onStage(PdfOcrStage.Recognizing)
