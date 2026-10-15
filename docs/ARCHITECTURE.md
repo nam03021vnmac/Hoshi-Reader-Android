@@ -288,7 +288,8 @@ refactor goals belong in `docs/ARCHITECTURE_REFACTORING.md`.
   It defaults to continuous scrolling; Appearance offers single-page viewing
   with horizontal swipe page turns (at fit-width or smaller zoom) and saves an
   independent profile-scoped PDF preference. Both modes render a lazy page window with
-  fit-width/button/pinch zoom, persist the
+  fit-width/button/pinch/double-tap zoom (double-tap only from
+  non-text taps, which wait for the double-tap window; text taps post at once), persist the
   page index through the shared bookmark sidecar, and reuses the shared reader
   chrome (title/progress bubble, bottom menu, focus mode, system bars, volume
   keys), lookup popup stack, highlight sidecars (page index as `character`),

@@ -8,7 +8,7 @@
 //
 //  PDF reader page runtime. Renders PDF pages through pdf.js with a
 //  selectable text layer, lazy page windows, zoom (fit-width, buttons,
-//  pinch), page jump, progress reporting, and highlight marks.
+//  pinch, double-tap), page jump, progress reporting, and highlight marks.
 
 import * as pdfjsLib from '/pdfjs/pdf.min.mjs';
 
@@ -18,6 +18,10 @@ const RENDER_MARGIN_PAGES = 2;
 const ZOOM_STEP = 1.25;
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 8.0;
+// Android ViewConfiguration double-tap timeout and slop (CSS px ~ dp).
+const DOUBLE_TAP_TIMEOUT_MS = 300;
+const DOUBLE_TAP_SLOP_PX = 100;
+const DOUBLE_TAP_ZOOM = 2.0;
 const MAX_CANVAS_PIXELS = 4 * 1024 * 1024;
 const MAX_CANVAS_DIMENSION = 8192;
 
@@ -614,24 +618,38 @@ function applyPinchPreview() {
   pagesRoot.style.transform = `scale(${scale})`;
 }
 
-function endPinch() {
-  const scale = pinchScale();
-  const focal = pinchFocal();
+// Keeps the content point under the viewport-relative `focal` fixed while the
+// zoom factor changes. Shared by pinch release and double-tap zoom.
+function zoomAtPoint(factor, focal) {
+  if (!Number.isFinite(factor) || !state.pdf || state.opening) return;
   const contentFocalX = viewport.scrollLeft + focal.x;
   const contentFocalY = viewport.scrollTop + focal.y;
-  pagesRoot.style.transform = '';
   const anchorDiv = state.pages[state.currentPageIndex]?.div;
   const fractionX = anchorDiv ? (contentFocalX - anchorDiv.offsetLeft) / anchorDiv.offsetWidth : 0;
   const fractionY = anchorDiv ? (contentFocalY - anchorDiv.offsetTop) / anchorDiv.offsetHeight : 0;
-  state.zoomFactor = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, state.zoomFactor * scale));
+  state.zoomFactor = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor));
   renderScaleChanged();
   if (anchorDiv) {
     viewport.scrollLeft = Math.max(0, anchorDiv.offsetLeft + fractionX * anchorDiv.offsetWidth - focal.x);
     viewport.scrollTop = Math.max(0, anchorDiv.offsetTop + fractionY * anchorDiv.offsetHeight - focal.y);
   }
-  state.pinch = null;
   onScroll();
   postMessage({ type: 'zoomChanged', zoomFactor: state.zoomFactor });
+}
+
+function endPinch() {
+  const scale = pinchScale();
+  const focal = pinchFocal();
+  pagesRoot.style.transform = '';
+  state.pinch = null;
+  zoomAtPoint(state.zoomFactor * scale, focal);
+}
+
+// --- Double-tap zoom ----------------------------------------------------------
+
+function toggleDoubleTapZoom(point) {
+  const atFitWidth = Math.abs(state.zoomFactor - 1.0) < 0.001;
+  zoomAtPoint(atFitWidth ? DOUBLE_TAP_ZOOM : 1.0, point);
 }
 
 // --- Highlights --------------------------------------------------------------
@@ -1034,6 +1052,48 @@ window.addEventListener('resize', () => {
 
 let touchStarted = null;
 let tapCandidate = null;
+// A blank-area tap held for the double-tap window. Text taps post at once so
+// lookup latency is unchanged; only non-text taps can start a double-tap.
+let pendingTap = null;
+
+function clearPendingTap() {
+  if (pendingTap) clearTimeout(pendingTap.timer);
+  pendingTap = null;
+}
+
+function postTap(candidate) {
+  postMessage({ type: 'tap', x: candidate.x, y: candidate.y });
+}
+
+function flushPendingTap() {
+  const held = pendingTap;
+  clearPendingTap();
+  if (held) postTap(held);
+}
+
+function handleTapCandidate(candidate) {
+  if (pendingTap?.awaitingSecond) {
+    clearPendingTap();
+    toggleDoubleTapZoom(candidate);
+    return;
+  }
+  flushPendingTap();
+  if (candidate.onText) {
+    postTap(candidate);
+    return;
+  }
+  const held = { x: candidate.x, y: candidate.y, awaitingSecond: false, timer: null };
+  held.timer = setTimeout(() => {
+    if (pendingTap !== held) return;
+    pendingTap = null;
+    postTap(held);
+  }, DOUBLE_TAP_TIMEOUT_MS);
+  pendingTap = held;
+}
+
+function isTextTarget(target) {
+  return !!target?.closest?.('.hoshi-pdf-text-layer span');
+}
 
 viewport.addEventListener(
   'touchstart',
@@ -1042,6 +1102,7 @@ viewport.addEventListener(
     if (touches.length === 2) {
       touchStarted = null;
       tapCandidate = null;
+      clearPendingTap();
       if (state.opening || !state.pdf) return;
       postMessage({ type: 'viewportChanged' });
       state.pinch = {
@@ -1065,8 +1126,21 @@ viewport.addEventListener(
         x: touches[0].clientX,
         y: touches[0].clientY,
         time: Date.now(),
+        onText: isTextTarget(event.target),
       };
       tapCandidate = touchStarted;
+      if (pendingTap && !pendingTap.awaitingSecond) {
+        if (Math.hypot(touchStarted.x - pendingTap.x, touchStarted.y - pendingTap.y) <= DOUBLE_TAP_SLOP_PX) {
+          // Like Android's GestureDetector, a second down inside the window
+          // retires the first single tap even if this touch becomes a drag.
+          clearTimeout(pendingTap.timer);
+          pendingTap.awaitingSecond = true;
+        } else {
+          flushPendingTap();
+        }
+      }
+    } else {
+      clearPendingTap();
     }
   },
   { passive: true },
@@ -1118,10 +1192,9 @@ viewport.addEventListener(
       const candidate = tapCandidate;
       tapCandidate = null;
       const elapsed = Date.now() - candidate.time;
-      if (elapsed < 400) {
-        postMessage({ type: 'tap', x: candidate.x, y: candidate.y });
-      }
+      if (elapsed < 400) handleTapCandidate(candidate);
     }
+    if (pendingTap?.awaitingSecond && event.touches.length === 0) clearPendingTap();
     touchStarted = null;
   },
   { passive: true },
@@ -1133,6 +1206,7 @@ viewport.addEventListener(
     state.pinch = null;
     touchStarted = null;
     tapCandidate = null;
+    clearPendingTap();
     pagesRoot.style.transform = '';
   },
   { passive: true },

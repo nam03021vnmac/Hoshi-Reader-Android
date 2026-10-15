@@ -95,6 +95,8 @@ function reader({ count = 12, pendingRender = false, pendingText = false, texts 
   const pageRequests = [];
   const cleanedPages = [];
   const windowListeners = new Map();
+  const timers = new Map();
+  let nextTimer = 1;
   let selection = null;
   let destroyed = 0;
   let loadError = false;
@@ -254,6 +256,8 @@ function reader({ count = 12, pendingRender = false, pendingText = false, texts 
     window, document, pdfjsLib, URL, console, Node: { TEXT_NODE: 3 },
     NodeFilter: { SHOW_TEXT: 4 }, CSS: {}, getSelection: () => selection,
     requestAnimationFrame: (callback) => frames.push(callback),
+    setTimeout: (callback) => { timers.set(nextTimer, callback); return nextTimer++; },
+    clearTimeout: (id) => timers.delete(id),
   });
   vm.runInContext(asset('shared/selection.js'), context);
   vm.runInContext(ocrLayerRuntime, context);
@@ -264,6 +268,12 @@ function reader({ count = 12, pendingRender = false, pendingText = false, texts 
     get destroyed() { return destroyed; },
     failLoad(value) { loadError = value; },
     gatePages(value) { pageGate = value; },
+    runTimers() {
+      const pending = [...timers.values()];
+      timers.clear();
+      pending.forEach((callback) => callback());
+    },
+    get pendingTimers() { return timers.size; },
     async flush() {
       for (let i = 0; i < 20; i += 1) {
         frames.splice(0).forEach((callback) => callback());
@@ -626,6 +636,67 @@ test('pinch prevents native scrolling and cancellation or third fingers leave no
   r.viewport.dispatch('touchstart', { touches });
   r.viewport.dispatch('touchcancel');
   assert.equal(r.root.style.transform, '');
+});
+
+test('double-tap on blank areas toggles fit-width and 2x at the tap point while text taps stay immediate', async () => {
+  const r = reader();
+  await r.api.open();
+  await r.flush();
+  const tap = (x, y, target) => {
+    const touch = { clientX: x, clientY: y };
+    r.viewport.dispatch('touchstart', { touches: [touch], target });
+    r.viewport.dispatch('touchend', { touches: [], changedTouches: [touch] });
+  };
+  const taps = () => r.messages.filter((message) => message.type === 'tap');
+  const zooms = () => r.messages.filter((message) => message.type === 'zoomChanged').map((message) => message.zoomFactor);
+
+  tap(300, 400);
+  assert.equal(taps().length, 0);
+  r.runTimers();
+  assert.deepEqual(taps().map(({ x, y }) => [x, y]), [[300, 400]]);
+
+  const span = r.textLayers[0].textDivs[0];
+  tap(300, 400, span);
+  assert.equal(taps().length, 2);
+  tap(300, 400, span);
+  assert.equal(taps().length, 3);
+  assert.equal(r.pendingTimers, 0);
+
+  tap(100, 100);
+  tap(500, 700);
+  assert.deepEqual(taps().slice(3).map(({ x }) => x), [100]);
+  r.runTimers();
+  assert.deepEqual(taps().slice(3).map(({ x }) => x), [100, 500]);
+
+  tap(300, 400);
+  r.viewport.dispatch('touchstart', { touches: [{ clientX: 300, clientY: 400 }] });
+  r.viewport.dispatch('touchmove', { touches: [{ clientX: 300, clientY: 500 }] });
+  r.viewport.dispatch('touchend', { touches: [], changedTouches: [{ clientX: 300, clientY: 500 }] });
+  tap(300, 400);
+  r.viewport.dispatch('touchstart', { touches: [{ clientX: 100, clientY: 100 }, { clientX: 200, clientY: 100 }] });
+  r.viewport.dispatch('touchcancel');
+  r.runTimers();
+  assert.equal(taps().length, 5);
+  assert.deepEqual(zooms(), []);
+
+  tap(300, 400);
+  tap(300, 400);
+  await r.flush();
+  assert.deepEqual(zooms(), [2]);
+  assert.equal(r.root.children[0].offsetWidth, 1200);
+  // The tapped content point stays under the finger.
+  assert.equal(r.viewport.scrollLeft, 300);
+  assert.equal(r.viewport.scrollTop, 392);
+
+  tap(300, 400);
+  tap(300, 400);
+  await r.flush();
+  assert.deepEqual(zooms(), [2, 1]);
+  assert.equal(r.root.children[0].offsetWidth, 600);
+  assert.equal(r.viewport.scrollLeft, 0);
+  assert.equal(r.viewport.scrollTop, 0);
+  assert.equal(taps().length, 5);
+  assert.equal(r.pendingTimers, 0);
 });
 
 test('document outline resolves named and explicit destinations to page indices', async () => {
