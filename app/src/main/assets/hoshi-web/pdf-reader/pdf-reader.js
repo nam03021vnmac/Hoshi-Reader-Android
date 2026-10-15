@@ -636,7 +636,9 @@ function pageIndexAt(point) {
 // zoom factor changes. Shared by pinch release and double-tap zoom. Anchors on
 // the page under the focal point: pages are centered, so a page of another
 // width moves horizontally by a different amount than the current page.
-function zoomAtPoint(factor, focal) {
+// `alignPage` snaps the anchor page's left edge to the viewport instead of
+// keeping the focal x, so a page zoomed to its fit width fills the screen.
+function zoomAtPoint(factor, focal, { alignPage = false } = {}) {
   if (!Number.isFinite(factor) || !state.pdf || state.opening) return;
   const contentFocalX = viewport.scrollLeft + focal.x;
   const contentFocalY = viewport.scrollTop + focal.y;
@@ -646,7 +648,9 @@ function zoomAtPoint(factor, focal) {
   state.zoomFactor = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor));
   renderScaleChanged();
   if (anchorDiv) {
-    viewport.scrollLeft = Math.max(0, anchorDiv.offsetLeft + fractionX * anchorDiv.offsetWidth - focal.x);
+    viewport.scrollLeft = alignPage
+      ? Math.max(0, anchorDiv.offsetLeft)
+      : Math.max(0, anchorDiv.offsetLeft + fractionX * anchorDiv.offsetWidth - focal.x);
     viewport.scrollTop = Math.max(0, anchorDiv.offsetTop + fractionY * anchorDiv.offsetHeight - focal.y);
   }
   onScroll();
@@ -663,18 +667,23 @@ function endPinch() {
 
 // --- Double-tap zoom ----------------------------------------------------------
 
+// zoomFactor is relative to page 1's fit width. Convert a page's own fit
+// width into that factor so pages of any size toggle the same way.
+function pageFitFactor(index) {
+  const record = state.pages[index];
+  if (!(record?.baseWidth > 0) || !(state.fitWidthScale > 0)) return 1.0;
+  const factor = Math.max(1, viewport.clientWidth) / record.baseWidth / state.fitWidthScale;
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor));
+}
+
+// Toggles the tapped page between fitting the screen width and 2.5x of it.
 function toggleDoubleTapZoom(point) {
-  if (Math.abs(state.zoomFactor - 1.0) >= 0.001) {
-    zoomAtPoint(1.0, point);
-    return;
+  const fit = pageFitFactor(pageIndexAt(point));
+  if (state.zoomFactor > fit * 1.001) {
+    zoomAtPoint(fit, point, { alignPage: true });
+  } else {
+    zoomAtPoint(DOUBLE_TAP_ZOOM * fit, point);
   }
-  // zoomFactor is relative to page 1's fit width. Convert the tapped page's
-  // own fit width into that factor so pages of any size zoom equally.
-  const record = state.pages[pageIndexAt(point)];
-  const pageFitFactor = record?.baseWidth > 0
-    ? Math.max(1, viewport.clientWidth) / record.baseWidth / state.fitWidthScale
-    : 1.0;
-  zoomAtPoint(DOUBLE_TAP_ZOOM * pageFitFactor, point);
 }
 
 // --- Highlights --------------------------------------------------------------

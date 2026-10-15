@@ -706,7 +706,7 @@ test('double-tap on blank areas toggles fit-width and 2.5x at the tap point whil
   assert.equal(r.pendingTimers, 0);
 });
 
-test('double-tap zooms a narrower page to 2.5x its own fit width anchored on that page', async () => {
+test('double-tap toggles a narrower page between its own fit width and 2.5x, anchored on that page', async () => {
   const r = reader({ count: 3, pageWidths: { 2: 225 } });
   await r.api.open();
   await r.flush();
@@ -727,11 +727,15 @@ test('double-tap zooms a narrower page to 2.5x its own fit width anchored on tha
   assert.equal(narrow.offsetWidth, 1500);
   assert.equal(r.viewport.scrollLeft, narrow.offsetLeft + 0.5 * narrow.offsetWidth - 300);
   assert.equal(r.viewport.scrollTop, narrow.offsetTop + 0.225 * narrow.offsetHeight - 700);
+  // Zooming out fits the narrower page to the screen rather than page 0.
   doubleTap(300, 700);
   await r.flush();
-  assert.equal(narrow.offsetWidth, 300);
-  assert.equal(r.viewport.scrollLeft, 0);
-  assert.equal(r.viewport.scrollTop, 300);
+  assert.equal(narrow.offsetWidth, 600);
+  assert.equal(r.viewport.scrollLeft, narrow.offsetLeft);
+  assert.equal(r.viewport.scrollTop, narrow.offsetTop + 0.225 * narrow.offsetHeight - 700);
+  doubleTap(300, 700);
+  await r.flush();
+  assert.equal(narrow.offsetWidth, 1500);
   assert.ok(!r.messages.some((message) => message.type === 'tap'));
 });
 

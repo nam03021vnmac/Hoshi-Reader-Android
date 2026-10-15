@@ -14,7 +14,7 @@ Historical release notes before v1.3.0 live in [CHANGELOG_ARCHIVE.md](CHANGELOG_
   Contents sheet with page slider and PDF chapter outline, continuous scrolling
   by default with a saved single-page option and swipe page turns in
   Appearance alongside zoom controls, pinch zoom, double-tap on a blank area to
-  toggle between fit width and 2.5x of the tapped page's own width, volume-key page turning, tap lookup with
+  toggle the tapped page between fitting the screen width and 2.5x, volume-key page turning, tap lookup with
   recursive popups, highlights, reading statistics, bookshelf covers, and PDF
   export. Scanned pages without selectable text can be read with on-device
   Japanese OCR, with tap lookup, highlights, and offline reuse after the first
