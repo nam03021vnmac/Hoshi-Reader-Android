@@ -60,7 +60,14 @@ class Element {
     const siblings = this.parentElement?.children || [];
     return 8 + siblings.slice(0, siblings.indexOf(this)).reduce((sum, item) => sum + (item.style.display === 'none' ? 0 : item.offsetHeight + 12), 0);
   }
-  get offsetLeft() { return 0; }
+  get offsetLeft() {
+    // #hoshi-pdf-pages centers pages inside max(viewport, widest page).
+    if (!this.classList.contains('hoshi-pdf-page') || this.style.display === 'none') return 0;
+    const siblings = this.parentElement?.children || [];
+    const widest = Math.max(this.parentElement?.parentElement?.clientWidth || 0,
+      ...siblings.filter((item) => item.style.display !== 'none').map((item) => item.offsetWidth));
+    return (widest - this.offsetWidth) / 2;
+  }
   getContext() { return { canvas: this }; }
   closest(selector) {
     const matches = selector.split(',').map((part) => part.trim());
@@ -84,7 +91,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function reader({ count = 12, pendingRender = false, pendingText = false, texts = ['alpha', 'beta.'], outline = null, dests = {} } = {}) {
+function reader({ count = 12, pendingRender = false, pendingText = false, texts = ['alpha', 'beta.'], outline = null, dests = {}, pageWidths = {} } = {}) {
   const viewport = new Element('div');
   const root = viewport.appendChild(new Element('div'));
   const frames = [];
@@ -101,9 +108,9 @@ function reader({ count = 12, pendingRender = false, pendingText = false, texts 
   let destroyed = 0;
   let loadError = false;
   let pageGate = null;
-  const makeViewport = (scale) => ({
-    width: 450 * scale, height: 600 * scale, scale,
-    clone: ({ scale: next }) => makeViewport(next),
+  const makeViewport = (scale, baseWidth = 450) => ({
+    width: baseWidth * scale, height: 600 * scale, scale,
+    clone: ({ scale: next }) => makeViewport(next, baseWidth),
   });
   const pdf = {
     numPages: count,
@@ -118,7 +125,7 @@ function reader({ count = 12, pendingRender = false, pendingText = false, texts 
       if (pageGate) await pageGate.promise;
       return {
         cleanup: () => cleanedPages.push(number),
-        getViewport: ({ scale }) => makeViewport(scale),
+        getViewport: ({ scale }) => makeViewport(scale, pageWidths[number]),
         streamTextContent: () => texts,
         render(options) {
           const task = { ...deferred(), options, number, cancelled: false, cancel() { this.cancelled = true; } };
@@ -638,7 +645,7 @@ test('pinch prevents native scrolling and cancellation or third fingers leave no
   assert.equal(r.root.style.transform, '');
 });
 
-test('double-tap on blank areas toggles fit-width and 2x at the tap point while text taps stay immediate', async () => {
+test('double-tap on blank areas toggles fit-width and 2.5x at the tap point while text taps stay immediate', async () => {
   const r = reader();
   await r.api.open();
   await r.flush();
@@ -682,21 +689,50 @@ test('double-tap on blank areas toggles fit-width and 2x at the tap point while 
   tap(300, 400);
   tap(300, 400);
   await r.flush();
-  assert.deepEqual(zooms(), [2]);
-  assert.equal(r.root.children[0].offsetWidth, 1200);
+  assert.deepEqual(zooms(), [2.5]);
+  assert.equal(r.root.children[0].offsetWidth, 1500);
   // The tapped content point stays under the finger.
-  assert.equal(r.viewport.scrollLeft, 300);
-  assert.equal(r.viewport.scrollTop, 392);
+  assert.equal(r.viewport.scrollLeft, 450);
+  assert.equal(r.viewport.scrollTop, 588);
 
   tap(300, 400);
   tap(300, 400);
   await r.flush();
-  assert.deepEqual(zooms(), [2, 1]);
+  assert.deepEqual(zooms(), [2.5, 1]);
   assert.equal(r.root.children[0].offsetWidth, 600);
   assert.equal(r.viewport.scrollLeft, 0);
   assert.equal(r.viewport.scrollTop, 0);
   assert.equal(taps().length, 5);
   assert.equal(r.pendingTimers, 0);
+});
+
+test('double-tap zooms a narrower page to 2.5x its own fit width anchored on that page', async () => {
+  const r = reader({ count: 3, pageWidths: { 2: 225 } });
+  await r.api.open();
+  await r.flush();
+  const narrow = r.root.children[1];
+  assert.equal(narrow.offsetWidth, 300);
+  assert.equal(narrow.offsetLeft, 150);
+  // Page 0 stays current while the tap lands on the narrower page 1.
+  r.viewport.scrollTop = 300;
+  const doubleTap = (x, y) => {
+    for (let i = 0; i < 2; i += 1) {
+      const touch = { clientX: x, clientY: y };
+      r.viewport.dispatch('touchstart', { touches: [touch] });
+      r.viewport.dispatch('touchend', { touches: [], changedTouches: [touch] });
+    }
+  };
+  doubleTap(300, 700);
+  await r.flush();
+  assert.equal(narrow.offsetWidth, 1500);
+  assert.equal(r.viewport.scrollLeft, narrow.offsetLeft + 0.5 * narrow.offsetWidth - 300);
+  assert.equal(r.viewport.scrollTop, narrow.offsetTop + 0.225 * narrow.offsetHeight - 700);
+  doubleTap(300, 700);
+  await r.flush();
+  assert.equal(narrow.offsetWidth, 300);
+  assert.equal(r.viewport.scrollLeft, 0);
+  assert.equal(r.viewport.scrollTop, 300);
+  assert.ok(!r.messages.some((message) => message.type === 'tap'));
 });
 
 test('document outline resolves named and explicit destinations to page indices', async () => {

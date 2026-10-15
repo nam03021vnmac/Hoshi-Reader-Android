@@ -21,7 +21,8 @@ const ZOOM_MAX = 8.0;
 // Android ViewConfiguration double-tap timeout and slop (CSS px ~ dp).
 const DOUBLE_TAP_TIMEOUT_MS = 300;
 const DOUBLE_TAP_SLOP_PX = 100;
-const DOUBLE_TAP_ZOOM = 2.0;
+// Relative to the tapped page's own fit width.
+const DOUBLE_TAP_ZOOM = 2.5;
 const MAX_CANVAS_PIXELS = 4 * 1024 * 1024;
 const MAX_CANVAS_DIMENSION = 8192;
 
@@ -618,13 +619,28 @@ function applyPinchPreview() {
   pagesRoot.style.transform = `scale(${scale})`;
 }
 
+// Page under a viewport-relative point, or the current page when the point
+// is outside every visible page row.
+function pageIndexAt(point) {
+  if (!state.continuousScroll) return state.currentPageIndex;
+  const contentY = viewport.scrollTop + point.y;
+  const { first, last } = visibleRange();
+  for (let index = first; index <= last; index += 1) {
+    const div = state.pages[index]?.div;
+    if (div && contentY < div.offsetTop + div.offsetHeight + PAGE_GAP_CSS_PX) return index;
+  }
+  return state.currentPageIndex;
+}
+
 // Keeps the content point under the viewport-relative `focal` fixed while the
-// zoom factor changes. Shared by pinch release and double-tap zoom.
+// zoom factor changes. Shared by pinch release and double-tap zoom. Anchors on
+// the page under the focal point: pages are centered, so a page of another
+// width moves horizontally by a different amount than the current page.
 function zoomAtPoint(factor, focal) {
   if (!Number.isFinite(factor) || !state.pdf || state.opening) return;
   const contentFocalX = viewport.scrollLeft + focal.x;
   const contentFocalY = viewport.scrollTop + focal.y;
-  const anchorDiv = state.pages[state.currentPageIndex]?.div;
+  const anchorDiv = state.pages[pageIndexAt(focal)]?.div;
   const fractionX = anchorDiv ? (contentFocalX - anchorDiv.offsetLeft) / anchorDiv.offsetWidth : 0;
   const fractionY = anchorDiv ? (contentFocalY - anchorDiv.offsetTop) / anchorDiv.offsetHeight : 0;
   state.zoomFactor = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor));
@@ -648,8 +664,17 @@ function endPinch() {
 // --- Double-tap zoom ----------------------------------------------------------
 
 function toggleDoubleTapZoom(point) {
-  const atFitWidth = Math.abs(state.zoomFactor - 1.0) < 0.001;
-  zoomAtPoint(atFitWidth ? DOUBLE_TAP_ZOOM : 1.0, point);
+  if (Math.abs(state.zoomFactor - 1.0) >= 0.001) {
+    zoomAtPoint(1.0, point);
+    return;
+  }
+  // zoomFactor is relative to page 1's fit width. Convert the tapped page's
+  // own fit width into that factor so pages of any size zoom equally.
+  const record = state.pages[pageIndexAt(point)];
+  const pageFitFactor = record?.baseWidth > 0
+    ? Math.max(1, viewport.clientWidth) / record.baseWidth / state.fitWidthScale
+    : 1.0;
+  zoomAtPoint(DOUBLE_TAP_ZOOM * pageFitFactor, point);
 }
 
 // --- Highlights --------------------------------------------------------------
