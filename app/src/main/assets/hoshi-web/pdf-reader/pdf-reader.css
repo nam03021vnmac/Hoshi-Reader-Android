@@ -38,7 +38,13 @@ body {
 }
 
 .hoshi-pdf-page canvas {
+  /* Fill the page box so a previous-scale raster stretches with zoom until
+     the new scale renders, instead of keeping its old CSS size. */
+  position: absolute;
+  inset: 0;
   display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .hoshi-pdf-page .hoshi-pdf-text-layer {

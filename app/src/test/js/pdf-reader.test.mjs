@@ -471,7 +471,8 @@ test('zoom keeps old pixels until the new scale swaps in, preserves page positio
   for (const render of r.renders.slice(oldRenders.length)) {
     const canvas = render.options.canvasContext.canvas;
     assert.ok(canvas.parentElement);
-    assert.equal(canvas.style.width, '4800px');
+    // CSS sizes canvases to the page box so stale rasters stretch with zoom.
+    assert.equal(canvas.style.width, undefined);
     assert.ok(canvas.width * canvas.height <= 4 * 1024 * 1024);
     assert.ok(canvas.width <= 8192 && canvas.height <= 8192);
   }
@@ -483,6 +484,28 @@ test('zoom keeps old pixels until the new scale swaps in, preserves page positio
   await r.flush();
   assert.equal(r.root.children[6].offsetWidth, 300);
   assert.equal(JSON.parse(r.api.progress()).pageIndex, 6);
+});
+
+test('until pages re-render at a new zoom, text layers follow the resized page box', async () => {
+  const r = reader();
+  await r.api.open({ sessionId: 'ocr-test' });
+  await r.flush();
+  assert.equal(r.ocr.applyOcr(ocrPayload(0)), true);
+  const layerOf = (index) => r.root.children[index].children.find((child) => child.classList.contains('textLayer'));
+  const ocrLayer = layerOf(0);
+  const embeddedLayer = layerOf(1);
+  assert.ok(ocrLayer.classList.contains('hoshi-pdf-ocr-layer'));
+  assert.ok(!embeddedLayer.classList.contains('hoshi-pdf-ocr-layer'));
+  const embeddedScale = Number(embeddedLayer.style['--scale-factor']);
+  r.api.setZoomFactor(2);
+  // Synchronously, before any replacement render lands.
+  assert.equal(ocrLayer.style.transform, 'scale(2)');
+  assert.ok(Math.abs(Number(embeddedLayer.style['--scale-factor']) - embeddedScale * 2) < 1e-9);
+  await r.flush();
+  const rebuiltOcr = layerOf(0);
+  assert.notEqual(rebuiltOcr, ocrLayer);
+  assert.ok(!rebuiltOcr.style.transform);
+  assert.ok(Math.abs(Number(layerOf(1).style['--scale-factor']) - embeddedScale * 2) < 1e-9);
 });
 
 test('eviction cancels pending canvas work and stale completions cannot recreate text layers', async () => {

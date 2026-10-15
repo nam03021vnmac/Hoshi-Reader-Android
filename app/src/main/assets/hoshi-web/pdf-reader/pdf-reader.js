@@ -118,6 +118,24 @@ function applyPageSize(record) {
   const width = record.baseWidth * scale;
   record.div.style.width = `${width}px`;
   record.div.style.aspectRatio = `${record.baseWidth} / ${record.baseHeight}`;
+  fitTextLayerToPage(record);
+}
+
+// The canvas stretches with the page box (CSS) until its new scale renders.
+// Keep the text layer, which carries lookup hit targets and highlight marks,
+// on the same box: pdf.js layers size from --scale-factor, while OCR layers
+// are laid out in CSS px at their build scale and need a uniform transform.
+function fitTextLayerToPage(record) {
+  const layer = record.textLayerDiv;
+  const builtScale = Number(layer?.dataset?.cssScale);
+  if (!layer || !(builtScale > 0)) return;
+  const scale = currentCssScale();
+  if (layer.classList.contains('hoshi-pdf-ocr-layer')) {
+    const ratio = scale / builtScale;
+    layer.style.transform = Math.abs(ratio - 1) < 0.0001 ? '' : `scale(${ratio})`;
+  } else {
+    layer.style.setProperty('--scale-factor', String(scale * PDF_TO_CSS_UNITS));
+  }
 }
 
 async function loadPageBase(pageNumber) {
@@ -253,8 +271,6 @@ function renderPage(index) {
       // Render into a detached canvas so the previous scale keeps showing
       // until the new pixels are ready to swap in atomically.
       const canvas = document.createElement('canvas');
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
       const outputScale = Math.min(
         window.devicePixelRatio || 1,
         Math.sqrt(MAX_CANVAS_PIXELS / (viewport.width * viewport.height)),
@@ -272,6 +288,8 @@ function renderPage(index) {
       await task.canvasTask.promise;
       if (task.cancelled) return;
       await renderTextLayer(record, page, viewport);
+      // The zoom may have moved on while the layer was built.
+      fitTextLayerToPage(record);
       if (task.cancelled || record.renderTask !== task) return;
       record.renderTask = null;
       if (Math.abs(scale - currentCssScale()) > 0.0001) {
@@ -315,6 +333,7 @@ async function renderTextLayer(record, page, viewport) {
   div.className = 'hoshi-pdf-text-layer textLayer';
   div.dataset.pageIndex = String(record.index);
   div.style.setProperty('--scale-factor', String(viewport.scale));
+  div.dataset.cssScale = String(viewport.scale / PDF_TO_CSS_UNITS);
   let streamSource = null;
   let extractionFailed = false;
   try {
@@ -413,6 +432,7 @@ function installOcrPayload(record, payload, viewport) {
   const built = layerApi.buildOcrDom(document, payload, cssWidth, cssHeight);
   if (!built) return false;
   built.layer.style.setProperty('--scale-factor', String(scale));
+  built.layer.dataset.cssScale = String(scale);
   record.textLayer?.cancel?.();
   record.textLayer = null;
   record.textLayerDiv?.remove();
